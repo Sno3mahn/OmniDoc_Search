@@ -1,0 +1,51 @@
+# .claudeignore for OmniDoc Search
+# Same syntax as .gitignore. This controls what Claude Code will read/index
+# as project context - it does NOT affect git. Keep secrets, generated
+# scrape output, vector DBs, and caches out of context.
+
+# --- secrets / credentials ---
+.env
+.env.*
+*.pem
+*.key
+
+# --- version control / editor cruft ---
+.git/
+.DS_Store
+.vscode/
+.idea/
+
+# --- python caches / venvs ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+ENV/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# --- this project's generated output ---
+# ETLWorkflow.save_files writes scraped docs to "<sitename>_dir/" at repo
+# root (see run_workflow.py dir_name derivation) - large, regenerable, not
+# something you want summarized into context.
+*_dir/
+save_dir/
+saved_dir/
+
+# Chroma / sqlite vector store files (rag_qe.py RAG_DB_PATH, and the older
+# import_stuff/rag_pipeline.py's ./docu_rag.db)
+*.db
+*.sqlite3
+chroma.sqlite3
+
+# logs
+*.log
+celerybeat-schedule
+
+# node/build artifacts, if a frontend gets added later (Phase 4)
+node_modules/
+dist/
+build/
