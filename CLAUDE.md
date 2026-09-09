@@ -89,3 +89,28 @@ Give both a beat-by-beat structure (hook / problem / walkthrough / demo / close)
 - Favor concrete, specific fixes over generic advice ("add error handling" is not a deliverable; "wrap `etl_per_site`'s `requests.get` in a retry with backoff and surface per-URL failures over the WebSocket instead of only printing them" is).
 - Keep a running short checklist of phase status (not started / in progress / delivered) and surface it when asked or when moving between phases.
 - Ask before anything irreversible, costly, or large in scope (installing heavy deps, deleting files, big refactors) — otherwise, keep moving without over-asking.
+
+## 4. Local Environment Notes (this machine, not portable)
+
+- **The Python venv for this project is NOT inside this repo.** It lives at
+  `/Users/ricky/Documents/workspace/agents_learn/agent_env/` (a separate
+  project directory). Activate it before running anything here:
+  `source /Users/ricky/Documents/workspace/agents_learn/agent_env/bin/activate`
+  - Confirmed present there: `llama-index-core` 0.14.15 + integration
+    packages (`llms-deepseek` needs adding - see below), `chromadb`,
+    `fastapi`, `uvicorn`, `websockets`, `playwright`, `pysqlite3`, `bs4`,
+    `python-dotenv`.
+  - Confirmed **missing** there: `celery`, `redis`, `kombu`, `billiard`.
+    Install with `uv pip install celery redis` before running the Celery
+    worker or hitting `/etl_workflow/` end-to-end.
+- **LLM provider is DeepSeek, not OpenAI** (`agentic_etl.py`, `rag_qe.py` both
+  use `from llama_index.llms.deepseek import DeepSeek`, model
+  `deepseek-v4-flash`). Needs `llama-index-llms-deepseek` installed in
+  `agent_env`, and an `API_DEEPSEEK` env var (read via `os.getenv`) - no
+  `.env` file exists in the repo yet, add one.
+  - **TODO, not done yet:** You'll need `llama-index-llms-deepseek`
+    installed in `agent_env` and an `.env` with `API_DEEPSEEK` - neither
+    exists yet.
+- No `.env` file exists in the repo. At minimum it needs `API_DEEPSEEK`.
+- A local Redis server on `redis://localhost:6379/0` (hardcoded in
+  `tasks.py`) is required to actually exercise the Celery hand-off.

@@ -4,7 +4,6 @@ from typing import Optional, List
 
 from llama_index.core.workflow import Context, Event
 from llama_index.core.agent.workflow import FunctionAgent, ReActAgent
-from llama_index.readers.web import SimpleWebPageReader
 from llama_index.core.agent.workflow import ToolCall, ToolCallResult, AgentStream
 
 
@@ -74,14 +73,3 @@ def write_to_file(content: str, file_name: str, dir_name: str) -> None:
     # Write content to file
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
-
-
-def extract_page_content(sites: List[str]) -> List[str]:
-    '''
-    Extract and return webpages content
-    Args:
-        sites: list of webpage URLs
-    '''
-    docs = SimpleWebPageReader(html_to_text=True).load_data(sites)
-    pages_content=[doc.get_content() for doc in docs]
-    return pages_content

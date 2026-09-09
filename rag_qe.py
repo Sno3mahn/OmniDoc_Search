@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.llms.openai import OpenAI
+from llama_index.llms.deepseek import DeepSeek
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import MarkdownNodeParser
 from llama_index.vector_stores.chroma import ChromaVectorStore
@@ -17,7 +17,7 @@ __import__('pysqlite3')
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 load_dotenv()
-OPENAI_KEY = os.getenv("API_OAI")
+DEEPSEEK_KEY = os.getenv("API_DEEPSEEK")
 
 
 class QueryEngine:
@@ -65,11 +65,11 @@ class QueryEngine:
 
     def _define_llms(
         self,
-        llm_model: str = "gpt-5-nano",
+        llm_model: str = "deepseek-v4-flash",
         embedding_model: str = "BAAI/bge-small-en-v1.5",
         batch_size: int = 8,
     ):
-        llm = OpenAI(model=llm_model, api_key=OPENAI_KEY)
+        llm = DeepSeek(model=llm_model, api_key=DEEPSEEK_KEY)
         emb_model = HuggingFaceEmbedding(embedding_model, embed_batch_size=batch_size)
         return llm, emb_model
 

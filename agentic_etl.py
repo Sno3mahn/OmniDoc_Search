@@ -9,24 +9,27 @@ from typing import List, Dict, Optional, Any, Tuple
 
 
 load_dotenv()
-OPENAI_KEY=os.getenv('API_OAI')
+DEEPSEEK_KEY = os.getenv('API_DEEPSEEK')
 
 
 from llama_index.core.workflow import Event
 from llama_index.core.tools import FunctionTool
 from llama_index.core.agent.workflow import FunctionAgent, ReActAgent
 # from llama_index.readers.web import SimpleWebPageReader
-from llama_index.llms.openai import OpenAI
+from llama_index.llms.deepseek import DeepSeek
 from llama_index.tools.code_interpreter import CodeInterpreterToolSpec
 from llama_index.tools.playwright import PlaywrightToolSpec
 # from llama_index.utils.workflow import draw_all_possible_flows
 # from llama_index.core.agent.workflow import ToolCall, ToolCallResult, AgentStream
 
 
-# Define LLMs
+# Define LLM - deepseek-v4-flash is DeepSeek's cheap/fast tier. All three
+# agents share one instance (the old base_llm/smort_llm split existed to
+# mix OpenAI's nano/mini tiers; DeepSeek's flash tier covers all three
+# agents' needs, so one shared client is simpler and there's nothing left
+# to tier).
 
-base_llm = OpenAI(model="gpt-5-nano", api_key=OPENAI_KEY)
-smort_llm = OpenAI(model="gpt-5-mini", api_key=OPENAI_KEY)
+llm = DeepSeek(model="deepseek-v4-flash", api_key=DEEPSEEK_KEY)
 
 
 async def _build_playwright_tools(use_playwright: bool) -> Tuple[List[Any], Any | None]:
@@ -46,21 +49,21 @@ async def build_agents(use_playwright: bool = True) -> Tuple[Dict[str, Any], Any
         "homepage_extraction_agent": ReActAgent(
             name="homepage_extraction_agent",
             description="Extracts links to list of contents and whether a md format of the page is available or not",
-            llm=base_llm,
+            llm=llm,
             system_prompt=HOMEPAGE_EXTRACTION_PROMPT,
             tools=[FunctionTool.from_defaults(extract_page_content), FunctionTool.from_defaults(get_html_body)],
         ),
         "md_ify_agent": FunctionAgent(
             name="md_ify_agent",
             description="Amends links to list of contents to md or txt or similar format of the page and notify if task was a success or not",
-            llm=smort_llm,
+            llm=llm,
             system_prompt=MD_IFICATION_PROMPT,
             tools=md_tools,
         ),
         "pattern_matching_agent": ReActAgent(
             name="pattern_matching_agent",
             description="Returns python code to clean up md files after identifying patterns in the homepage",
-            llm=base_llm,
+            llm=llm,
             system_prompt=PATTERN_MATCHING_PROMPT,
             tools=[FunctionTool.from_defaults(extract_page_content)] + CodeInterpreterToolSpec().to_tool_list(),
         ),
