@@ -87,4 +87,4 @@ class DirNameEvent(Event):
     pass
 
 class StatusEmitterEvent(Event):
-    present_status: str
+    status: str

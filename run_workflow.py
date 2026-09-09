@@ -122,14 +122,18 @@ class ETLWorkflow(Workflow):
     @step(num_workers=6)
     async def save_files(self, ctx: Context, ev: ExtractWebpageEvent ) -> DirNameEvent: 
 
-        list_of_contents  = ev.list_of_contents
-        list_of_contents = list_of_contents if list_of_contents else await ctx.store.get("list_of_contents", []) 
-
-        dir_name = await ctx.store.get('dir_name', 'save_dir')
-        html_to_md = await ctx.store.get("html_to_md", {})
+        # Use the batch-scoped values carried on this event, not the full
+        # store-level lists - each of the N concurrent save_files calls must
+        # only process its own batch, not every URL in the whole job.
+        html_to_md = ev.html_to_md or {}
         md_to_html = {md: html for html, md in html_to_md.items()}
+
         if html_to_md:
             list_of_contents = list(html_to_md.values())
+        else:
+            list_of_contents = ev.list_of_contents or await ctx.store.get("list_of_contents", [])
+
+        dir_name = await ctx.store.get('dir_name', 'save_dir')
 
         # TODO: implement extract raw page and clean-up using markdownify
         file_name_map = await ctx.store.get('file_name_map', {})
@@ -167,19 +171,23 @@ class ETLWorkflow(Workflow):
     
             
     @step
-    async def wait_until_over(self, ctx: Context, ev: DirNameEvent) -> StopEvent:
+    async def wait_until_over(self, ctx: Context, ev: DirNameEvent) -> StopEvent | None:
         num_running_events = await ctx.store.get('num_conc_running_events', 1)
         events = ctx.collect_events(ev, [DirNameEvent] * num_running_events)
+        # collect_events returns None until ALL num_running_events DirNameEvents
+        # have arrived - only proceed once the full set is in.
+        if events is None:
+            return None
+
         list_of_contents = await ctx.store.get('list_of_contents')
         dir_name = await ctx.store.get('dir_name', 'saved_dir')
         ctx.write_event_to_stream(StatusEmitterEvent(status="Saved all files"))
 
-        if events is None:
-            if os.path.isdir(dir_name):
-                if len(os.listdir(dir_name)) == len(list_of_contents):
-                    return StopEvent(result='{"status":"success","dir_name":"'+dir_name+'"}')
-                return StopEvent(result='{"status":"'+ f'partial success- {len(list_of_contents)-len(os.listdir(dir_name))} files missing' +'","dir_name":"'+dir_name+'"}')
-            return StopEvent(result='{"status":"failed","dir_name":"unavailable dir"}')
+        if os.path.isdir(dir_name):
+            if len(os.listdir(dir_name)) == len(list_of_contents):
+                return StopEvent(result='{"status":"success","dir_name":"'+dir_name+'"}')
+            return StopEvent(result='{"status":"'+ f'partial success- {len(list_of_contents)-len(os.listdir(dir_name))} files missing' +'","dir_name":"'+dir_name+'"}')
+        return StopEvent(result='{"status":"failed","dir_name":"unavailable dir"}')
 
 
 

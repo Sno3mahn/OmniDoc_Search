@@ -31,7 +31,7 @@ async def run_concurrent_workflows(list_of_contents: List[str],
         batch_of_contents = list_of_contents[i:i+batch_size]
         batch_of_md_dict = {src: html_to_md[src] for src in list(html_to_md.keys())[i:i+batch_size]}
         if clean_up_code is _NOT_PROVIDED:
-            ctx.send_event(send_to_event(html_to_md=batch_of_md_dict, source_found=source_found))
+            ctx.send_event(send_to_event(list_of_contents=batch_of_contents, html_to_md=batch_of_md_dict, source_found=source_found))
         elif source_found is _NOT_PROVIDED:
             ctx.send_event(send_to_event(list_of_contents=batch_of_contents, clean_up_code=clean_up_code))
         else:

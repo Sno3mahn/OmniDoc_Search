@@ -69,6 +69,49 @@ async def run_etl_workflow(request: Request):
     else:
         return {"status": "failed", "message": "homepage_url not provided"}
     
+@app.get('/query/status')
+async def query_status():
+    query_engine = QueryEngine(
+        collection_name=RAG_COLLECTION_NAME,
+        db_path=RAG_DB_PATH,
+    )
+    return {
+        "ready": bool(query_engine.pipeline_run and query_engine.query_engine is not None),
+    }
+
+
+@app.post('/query')
+async def query_docs(request: Request):
+    req = await request.json()
+    question = req.get('query', '')
+    if not question:
+        return {"status": "failed", "message": "query not provided"}
+
+    query_engine = QueryEngine(
+        collection_name=RAG_COLLECTION_NAME,
+        db_path=RAG_DB_PATH,
+    )
+    if not query_engine.pipeline_run or query_engine.query_engine is None:
+        return {
+            "status": "failed",
+            "message": "no ingested documents yet - run /etl_workflow/ and wait for the pipeline to finish before querying",
+        }
+
+    try:
+        response = await query_engine.query_engine.aquery(question)
+    except Exception as ex:
+        return {"status": "failed", "message": str(ex)}
+
+    return {
+        "status": "success",
+        "answer": str(response),
+        "sources": [
+            {"text": node.node.get_content()[:500], "score": node.score}
+            for node in getattr(response, "source_nodes", [])
+        ],
+    }
+
+
 @app.websocket("/ws/stream/{job_id}")
 async def stream_events(ws: WebSocket, job_id: str):
     await ws.accept()
