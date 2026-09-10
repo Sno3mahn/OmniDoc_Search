@@ -31,18 +31,42 @@ from llama_index.tools.playwright import PlaywrightToolSpec
 llm = DeepSeek(model="deepseek-v4-flash", api_key=DEEPSEEK_KEY)
 
 
-async def _build_playwright_tools(use_playwright: bool) -> Tuple[List[Any], Any | None]:
+async def _build_render_tool(use_playwright: bool) -> Tuple[Optional[FunctionTool], Any | None]:
+    """A single narrow Playwright-backed tool, not the full PlaywrightToolSpec
+    surface (click/fill/navigate_back/extract_hyperlinks/...). Neither agent's
+    prompt ever asks for interactive automation - they only ever need "load
+    this URL with JS execution and give me the rendered HTML" as a fallback
+    for when the cheap plain-HTTP fetch (get_html_body) misses content that's
+    added client-side (common on Docusaurus/Next.js/Mintlify-style doc sites).
+    Exposing only this one tool keeps the agent's tool-choice surface small
+    and keeps the (expensive, slow) browser path opt-in per URL rather than
+    the default for every fetch.
+    """
     if not use_playwright:
-        return [], None
+        return None, None
     browser = await PlaywrightToolSpec.create_async_playwright_browser(headless=True)
-    return PlaywrightToolSpec(async_browser=browser).to_tool_list(), browser
+
+    async def render_page_html(url: str) -> str:
+        """Loads a URL in a real browser (runs the page's JavaScript) and
+        returns the rendered HTML. Slower and more expensive than
+        get_html_body - only use this for a URL where get_html_body's result
+        looks incomplete (e.g. missing content you'd expect, or a body that's
+        mostly empty aside from a single root div, which usually means the
+        real content is rendered client-side)."""
+        page = await browser.new_page()
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=15000)
+            return await page.content()
+        finally:
+            await page.close()
+
+    return FunctionTool.from_defaults(render_page_html, name="render_page_html"), browser
 
 
 async def build_agents(use_playwright: bool = True) -> Tuple[Dict[str, Any], Any | None]:
-    playwright_tools, browser = await _build_playwright_tools(use_playwright)
-    md_tools = [FunctionTool.from_defaults(extract_page_content)]
-    if playwright_tools:
-        md_tools.extend(playwright_tools)
+    render_tool, browser = await _build_render_tool(use_playwright)
+    base_fetch_tools = [FunctionTool.from_defaults(extract_page_content), FunctionTool.from_defaults(get_html_body)]
+    fetch_tools_with_fallback = base_fetch_tools + ([render_tool] if render_tool is not None else [])
 
     return {
         "homepage_extraction_agent": ReActAgent(
@@ -50,14 +74,14 @@ async def build_agents(use_playwright: bool = True) -> Tuple[Dict[str, Any], Any
             description="Extracts links to list of contents and whether a md format of the page is available or not",
             llm=llm,
             system_prompt=HOMEPAGE_EXTRACTION_PROMPT,
-            tools=[FunctionTool.from_defaults(extract_page_content), FunctionTool.from_defaults(get_html_body)],
+            tools=fetch_tools_with_fallback,
         ),
         "md_ify_agent": FunctionAgent(
             name="md_ify_agent",
             description="Amends links to list of contents to md or txt or similar format of the page and notify if task was a success or not",
             llm=llm,
             system_prompt=MD_IFICATION_PROMPT,
-            tools=md_tools,
+            tools=fetch_tools_with_fallback,
         ),
         "pattern_matching_agent": ReActAgent(
             name="pattern_matching_agent",

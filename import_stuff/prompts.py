@@ -5,6 +5,8 @@ Your goal:
 1. Determine if there is a reliable way to access the **original Markdown source** of the pages (best quality, no conversion artifacts).
 2. Extract the main table of contents / navigation structure as a flat list of full, absolute URLs to individual documentation pages.
 
+Fetching pages: use get_html_body first - it's cheap. Only call render_page_html (loads the page in a real browser and runs its JavaScript, so it's slower and more expensive) if get_html_body's result looks incomplete for what you're looking for - e.g. the body is mostly empty aside from a single root div, or you can't find a nav/sidebar/content structure you'd expect a docs homepage to have. That usually means the real content is rendered client-side and get_html_body only caught the pre-render HTML shell.
+
 Step-by-step instructions:
 
 A. Markdown source availability (set "available_in_md": true ONLY if confident)
@@ -33,7 +35,9 @@ Final output must be **only** this JSON — no other text:
 
 
 MD_IFICATION_PROMPT = '''
-You're given tools to interact with a webpage (browse, click simulated via instructions, follow links, extract elements, etc.). Your goal is to find a clean Markdown (.md / .mdx / .txt / raw) version of the documentation page, stripping away headers, footers, navigation, sidebars, ads, footers, cookie banners, etc.
+You're given tools to fetch a webpage's HTML (get_html_body for a cheap plain fetch, render_page_html for a real-browser render when get_html_body's result looks incomplete) and to extract page text (extract_page_content). Your goal is to find a clean Markdown (.md / .mdx / .txt / raw) version of the documentation page, stripping away headers, footers, navigation, sidebars, ads, footers, cookie banners, etc.
+
+Fetching pages: try get_html_body first for every URL - it's cheap. Only call render_page_html for a URL where get_html_body didn't turn up the elements described below (e.g. no "Edit this page"/pencil/GitHub link anywhere and the body looks mostly empty aside from a single root div) - that pattern usually means the page needs JavaScript to render, and render_page_html (real browser, runs the page's JS) will see what get_html_body couldn't.
 
 Preferred / primary method — highest quality, no conversion loss:
 1. Look very carefully (top-right, bottom of content, footer area, floating buttons, pencil icon) for links/buttons with text like:
