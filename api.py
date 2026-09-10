@@ -4,8 +4,6 @@ from uuid import uuid4
 from typing import Dict, Any
 from celery.result import AsyncResult
 from fastapi import Request, FastAPI, WebSocket, WebSocketDisconnect
-# import asyncio
-# import socketio
 
 from run_workflow import ETLWorkflow
 from agentic_etl import build_agents, StatusEmitterEvent
@@ -14,13 +12,9 @@ from rag_qe import QueryEngine
 from tasks import celery_app, run_pipeline_task
 
 active_wfs: Dict[str, Any] = {}
-dir_name: str = None
-homepage_url: str = None
 RAG_COLLECTION_NAME = "dt_doc_collection"
 RAG_DB_PATH = "./omnidoc_search.db"
 app = FastAPI()
-# sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
-# socket_app = socketio.ASGIApp(sio, other_asgi_app=app)
 
 
 async def _sync_query_engine_state(task_id: str):
@@ -42,32 +36,75 @@ async def health_check():
     return {"message": "OK"}
 
 
+async def _drive_workflow(job_id: str, handler, playwright_browser):
+    """Runs independently of any WebSocket connection, so a client disconnecting
+    mid-run can't cause the workflow to be abandoned or the Celery hand-off to be
+    skipped. Owns the playwright browser's lifetime - it's only closed here, once
+    the workflow has actually finished using it."""
+    job_data = active_wfs[job_id]
+    queue: asyncio.Queue = job_data['queue']
+    try:
+        async for ev in handler.stream_events():
+            if isinstance(ev, StatusEmitterEvent):
+                await queue.put({"type": "status", "data": ev.status})
+            elif isinstance(ev, StopEvent):
+                res = json.loads(ev.result)
+                status = res.get("status", "")
+                dir_name = res.get("dir_name") if "failed" not in status else None
+
+                if dir_name:
+                    pipeline_task = run_pipeline_task.delay(
+                        collection_name=RAG_COLLECTION_NAME,
+                        db_path=RAG_DB_PATH,
+                        input_dir=dir_name,
+                    )
+                    asyncio.create_task(_sync_query_engine_state(pipeline_task.id))
+                    await queue.put(
+                        {"type": "pipeline_started", "data": {"task_id": pipeline_task.id}}
+                    )
+
+                job_data['final'] = {"type": "done", "data": status}
+                await queue.put(job_data['final'])
+        await handler
+    except Exception as exc:
+        job_data['final'] = {"type": "error", "data": str(exc)}
+        await queue.put(job_data['final'])
+    finally:
+        if playwright_browser is not None:
+            await playwright_browser.close()
+        job_data['finished'] = True
+        await queue.put(None)  # sentinel: tells any connected WS to stop reading
+
+
 @app.post('/etl_workflow/')
 async def run_etl_workflow(request: Request):
     req = await request.json()
     homepage_url = req.get('homepage_url', '')
-    if homepage_url:
-        # asyncio.sleep(10)
-        job_id = str(uuid4())
-        agents, playwright_browser = await build_agents(use_playwright=True)
-        try:
-            wf = ETLWorkflow(
-                homepage_url=homepage_url,
-                agents=agents,
-                timeout=None,
-            )
-            handler = wf.run()
-            active_wfs[job_id] = {'handler': handler}
-            return {"status": "success", "job_id": job_id, "message": "triggered workflow"}
-        except Exception as ex:
-            return {"status": "failed", "message": str(ex)}
-        finally:
-            if playwright_browser is not None:
-                await playwright_browser.close()
-        # background_tasks.add_task(heavy_processing_task, home_page_url, True, sid, sio)
-        # await run_workflow_main(homepage_url=homepage_url, use_playwright_tools=True)
-    else:
+    if not homepage_url:
         return {"status": "failed", "message": "homepage_url not provided"}
+
+    job_id = str(uuid4())
+    agents, playwright_browser = await build_agents(use_playwright=True)
+    try:
+        wf = ETLWorkflow(
+            homepage_url=homepage_url,
+            agents=agents,
+            timeout=None,
+        )
+        handler = wf.run()
+    except Exception as ex:
+        if playwright_browser is not None:
+            await playwright_browser.close()
+        return {"status": "failed", "message": str(ex)}
+
+    active_wfs[job_id] = {
+        'handler': handler,
+        'queue': asyncio.Queue(),
+        'finished': False,
+        'final': None,
+    }
+    asyncio.create_task(_drive_workflow(job_id, handler, playwright_browser))
+    return {"status": "success", "job_id": job_id, "message": "triggered workflow"}
     
 @app.get('/query/status')
 async def query_status():
@@ -120,39 +157,21 @@ async def stream_events(ws: WebSocket, job_id: str):
         await ws.send_json({"type": "error", "message": "job not found"})
         await ws.close()
         return
-    handler = job_data.get('handler')
+
+    # Job already finished before this client connected (e.g. reconnect after
+    # a drop) - replay the final message instead of blocking on an empty queue.
+    if job_data['finished']:
+        if job_data['final'] is not None:
+            await ws.send_json(job_data['final'])
+        await ws.close()
+        return
+
+    queue: asyncio.Queue = job_data['queue']
     try:
-        async for ev in handler.stream_events():
-            if isinstance(ev, StatusEmitterEvent):
-                await ws.send_json({"type": "status", "data": ev.status})
-            elif isinstance(ev, StopEvent):
-                res = json.loads(ev.result)
-                status = res.get("status", "")
-                dir_name = res.get("dir_name") if "failed" not in status else None
-
-                if dir_name:
-                    pipeline_task = run_pipeline_task.delay(
-                        collection_name=RAG_COLLECTION_NAME,
-                        db_path=RAG_DB_PATH,
-                        input_dir=dir_name,
-                    )
-                    asyncio.create_task(_sync_query_engine_state(pipeline_task.id))
-                    await ws.send_json(
-                        {
-                            "type": "pipeline_started",
-                            "data": {"task_id": pipeline_task.id},
-                        }
-                    )
-
-                await ws.send_json({"type": "done", "data": status})
-
-        await handler
+        while True:
+            msg = await queue.get()
+            if msg is None:
+                break
+            await ws.send_json(msg)
     except WebSocketDisconnect:
         pass
-    except Exception as exc:
-        try:
-            await ws.send_json({"type": "error", "data": str(exc)})
-        finally:
-            handler.cancel()
-    finally:
-        del active_wfs[job_id]

@@ -67,8 +67,6 @@ async def build_agents(use_playwright: bool = True) -> Tuple[Dict[str, Any], Any
             system_prompt=PATTERN_MATCHING_PROMPT,
             tools=[FunctionTool.from_defaults(extract_page_content)] + CodeInterpreterToolSpec().to_tool_list(),
         ),
-        # "extract_page_content_agent": FunctionAgent(name='extract_page_content_agent', description='extracts, cleans and stores the file content in md format in <framework_name>/ path',
-        #                                   llm=base_llm, system_prompt=extract_page_content_prompt, tools=[FunctionTool.from_defaults(extract_page_content), FunctionTool.from_defaults(write_to_file)] + CodeInterpreterToolSpec().to_tool_list())
     }, browser
 
 

@@ -13,7 +13,6 @@ from random import sample
 import argparse
 import concurrent
 import asyncio
-import socketio
 from typing import Dict, Any
 
 from llama_index.core.workflow import StartEvent, StopEvent, Context, Workflow, step
@@ -100,7 +99,8 @@ class ETLWorkflow(Workflow):
         res = json.loads(str(res))
 
         html_to_md = res.get("html_to_md", {})
-        html_to_md = html_to_md if html_to_md else list_of_contents
+        if not html_to_md:
+            html_to_md = {url: url for url in list_of_contents}
         source_found = res.get("source_found", False)
         await ctx.store.set("html_to_md", html_to_md)
         ctx.write_event_to_stream(StatusEmitterEvent(status="Fetched md links"))
