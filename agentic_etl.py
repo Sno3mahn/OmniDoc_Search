@@ -1,6 +1,6 @@
 from import_stuff import (
     PATTERN_MATCHING_PROMPT, MD_IFICATION_PROMPT, HOMEPAGE_EXTRACTION_PROMPT,
-    get_html_body, extract_page_content,
+    get_html_body, extract_page_content, sandboxed_code_interpreter,
 )
 
 import os
@@ -17,7 +17,6 @@ from llama_index.core.tools import FunctionTool
 from llama_index.core.agent.workflow import FunctionAgent, ReActAgent
 # from llama_index.readers.web import SimpleWebPageReader
 from llama_index.llms.deepseek import DeepSeek
-from llama_index.tools.code_interpreter import CodeInterpreterToolSpec
 from llama_index.tools.playwright import PlaywrightToolSpec
 # from llama_index.utils.workflow import draw_all_possible_flows
 # from llama_index.core.agent.workflow import ToolCall, ToolCallResult, AgentStream
@@ -65,7 +64,10 @@ async def build_agents(use_playwright: bool = True) -> Tuple[Dict[str, Any], Any
             description="Returns python code to clean up md files after identifying patterns in the homepage",
             llm=llm,
             system_prompt=PATTERN_MATCHING_PROMPT,
-            tools=[FunctionTool.from_defaults(extract_page_content)] + CodeInterpreterToolSpec().to_tool_list(),
+            tools=[
+                FunctionTool.from_defaults(extract_page_content),
+                FunctionTool.from_defaults(sandboxed_code_interpreter),
+            ],
         ),
     }, browser
 

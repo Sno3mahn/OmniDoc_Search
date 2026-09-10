@@ -2,7 +2,8 @@ from agentic_etl import (
     MDifyEvent, AnalyseTextEvent, ExtractWebpageEvent, StatusEmitterEvent, DirNameEvent, build_agents
 )
 from import_stuff import (
-    extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json
+    extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json,
+    is_safe_url,
 )
 
 import os
@@ -137,6 +138,8 @@ class ETLWorkflow(Workflow):
         # TODO: implement extract raw page and clean-up using markdownify
         file_name_map = await ctx.store.get('file_name_map', {})
         def etl_per_site(site: str):
+            if not is_safe_url(site):
+                raise ValueError(f"Refusing to fetch non-public URL: {site}")
             file_name = file_name_map.get(site, '')
             alt_site = md_to_html.get(site, '')
             if not file_name and alt_site:
@@ -145,6 +148,8 @@ class ETLWorkflow(Workflow):
             status = response.status_code
             if status != 200:
                 if alt_site:
+                    if not is_safe_url(alt_site):
+                        raise ValueError(f"Refusing to fetch non-public URL: {alt_site}")
                     response = requests.get(alt_site, timeout=15)
                     status = response.status_code
                     if status != 200:

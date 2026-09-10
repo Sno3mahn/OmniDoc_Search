@@ -15,7 +15,7 @@ def run_pipeline_task(
     db_path: str = "./omnidoc_search.db",
     input_dir: str = "save_dir",
 ):
-    query_engine = QueryEngine(collection_name=collection_name, db_path=db_path)
+    query_engine = QueryEngine(db_path=db_path)
     ingested_nodes = query_engine.run_pipeline(
         collection_name=collection_name,
         db_path=db_path,

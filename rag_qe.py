@@ -1,7 +1,9 @@
 import os
+import re
 import sys
 from threading import Lock
-from typing import Optional
+from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import chromadb
 from dotenv import load_dotenv
@@ -20,6 +22,24 @@ load_dotenv()
 DEEPSEEK_KEY = os.getenv("API_DEEPSEEK")
 
 
+def collection_name_for_url(homepage_url: str) -> str:
+    """Derives a stable, Chroma-legal collection name from a docs homepage URL,
+    so each site gets its own namespace instead of every ingestion sharing one
+    fixed collection. Chroma collection names must be 3-63 chars, start/end
+    alphanumeric, and contain only [a-zA-Z0-9._-].
+    """
+    parsed = urlparse(homepage_url if "://" in homepage_url else f"https://{homepage_url}")
+    host = (parsed.netloc or parsed.path).lower()
+    host = re.sub(r"^www\.", "", host)
+    slug = re.sub(r"[^a-z0-9]+", "-", host).strip("-")
+    if not slug:
+        slug = "site"
+    name = f"doc-{slug}"[:63].strip("-")
+    if len(name) < 3:
+        name = (name + "-col")[:63]
+    return name
+
+
 class QueryEngine:
     _instance = None
     _instance_lock = Lock()
@@ -32,30 +52,28 @@ class QueryEngine:
                     cls._instance._bootstrapped = False
         return cls._instance
 
-    def __init__(
-        self,
-        collection_name: str = "dt_doc_collection",
-        db_path: str = "./omnidoc_search.db",
-    ):
+    def __init__(self, db_path: str = "./omnidoc_search.db"):
         if self._bootstrapped:
-            self.configure(collection_name=collection_name, db_path=db_path)
+            self.configure(db_path=db_path)
             return
 
-        self.collection_name = collection_name
         self.db_path = db_path
-        self.pipeline_run = False
-        self.query_engine = None
+        # Keyed by collection_name - one Chroma db can (and now does) hold a
+        # separate collection per ingested site, so readiness/engine state
+        # can't be a single flat attribute anymore.
+        self._ready: Dict[str, bool] = {}
+        self._query_engines: Dict[str, Any] = {}
         self._bootstrapped = True
 
-    def configure(
-        self,
-        collection_name: Optional[str] = None,
-        db_path: Optional[str] = None,
-    ):
-        if collection_name:
-            self.collection_name = collection_name
+    def configure(self, db_path: Optional[str] = None):
         if db_path:
             self.db_path = db_path
+
+    def is_ready(self, collection_name: str) -> bool:
+        return bool(self._ready.get(collection_name)) and collection_name in self._query_engines
+
+    def get_query_engine(self, collection_name: str):
+        return self._query_engines.get(collection_name)
 
     def _load_docs(self, input_dir: str = "save_dir"):
         reader = SimpleDirectoryReader(input_dir=input_dir)
@@ -87,17 +105,14 @@ class QueryEngine:
 
     def run_pipeline(
         self,
-        collection_name: Optional[str] = None,
+        collection_name: str,
         db_path: Optional[str] = None,
         input_dir: str = "save_dir",
     ) -> int:
-        self.configure(collection_name=collection_name, db_path=db_path)
+        self.configure(db_path=db_path)
         docs = self._load_docs(input_dir=input_dir)
         _, emb_model = self._define_llms()
-        vector_store = self._define_db(
-            collection_name=self.collection_name,
-            db_path=self.db_path,
-        )
+        vector_store = self._define_db(collection_name=collection_name, db_path=self.db_path)
 
         pipeline = IngestionPipeline(
             transformations=[MarkdownNodeParser(), emb_model],
@@ -105,33 +120,32 @@ class QueryEngine:
         )
 
         nodes = pipeline.run(documents=docs)
-        self.pipeline_run = True
+        self._ready[collection_name] = True
         return len(nodes)
 
     def initialize_query_engine(
         self,
-        collection_name: Optional[str] = None,
+        collection_name: str,
         db_path: Optional[str] = None,
     ):
-        self.configure(collection_name=collection_name, db_path=db_path)
-        if not self.pipeline_run:
+        self.configure(db_path=db_path)
+        if not self._ready.get(collection_name):
             raise RuntimeError(
-                "run_pipeline must finish before initialize_query_engine is called."
+                f"run_pipeline must finish for collection {collection_name!r} "
+                "before initialize_query_engine is called."
             )
         llm, emb_model = self._define_llms()
-        vector_store = self._define_db(
-            collection_name=self.collection_name,
-            db_path=self.db_path,
-        )
+        vector_store = self._define_db(collection_name=collection_name, db_path=self.db_path)
         db_index = VectorStoreIndex.from_vector_store(vector_store, embed_model=emb_model)
-        self.query_engine = db_index.as_query_engine(
+        query_engine = db_index.as_query_engine(
             llm=llm,
             response_mode="tree_summarize",
         )
-        return self.query_engine
+        self._query_engines[collection_name] = query_engine
+        return query_engine
 
-    def mark_pipeline_complete(self, auto_initialize: bool = True):
-        self.pipeline_run = True
+    def mark_pipeline_complete(self, collection_name: str, auto_initialize: bool = True):
+        self._ready[collection_name] = True
         if auto_initialize:
-            return self.initialize_query_engine()
+            return self.initialize_query_engine(collection_name)
         return None

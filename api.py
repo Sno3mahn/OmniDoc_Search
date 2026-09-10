@@ -8,35 +8,30 @@ from fastapi import Request, FastAPI, WebSocket, WebSocketDisconnect
 from run_workflow import ETLWorkflow
 from agentic_etl import build_agents, StatusEmitterEvent
 from llama_index.core.workflow import StopEvent
-from rag_qe import QueryEngine
+from rag_qe import QueryEngine, collection_name_for_url
 from tasks import celery_app, run_pipeline_task
+from import_stuff import is_safe_url
 
 active_wfs: Dict[str, Any] = {}
-RAG_COLLECTION_NAME = "dt_doc_collection"
 RAG_DB_PATH = "./omnidoc_search.db"
 app = FastAPI()
 
 
-async def _sync_query_engine_state(task_id: str):
+async def _sync_query_engine_state(task_id: str, collection_name: str):
     result = AsyncResult(task_id, app=celery_app)
     while not result.ready():
         await asyncio.sleep(1)
 
-    query_engine = QueryEngine(
-        collection_name=RAG_COLLECTION_NAME,
-        db_path=RAG_DB_PATH,
-    )
+    query_engine = QueryEngine(db_path=RAG_DB_PATH)
     if result.successful():
-        query_engine.mark_pipeline_complete(auto_initialize=True)
-    else:
-        query_engine.pipeline_run = False
+        query_engine.mark_pipeline_complete(collection_name, auto_initialize=True)
 
 @app.get('/health_check')
 async def health_check():
     return {"message": "OK"}
 
 
-async def _drive_workflow(job_id: str, handler, playwright_browser):
+async def _drive_workflow(job_id: str, handler, playwright_browser, collection_name: str):
     """Runs independently of any WebSocket connection, so a client disconnecting
     mid-run can't cause the workflow to be abandoned or the Celery hand-off to be
     skipped. Owns the playwright browser's lifetime - it's only closed here, once
@@ -54,11 +49,13 @@ async def _drive_workflow(job_id: str, handler, playwright_browser):
 
                 if dir_name:
                     pipeline_task = run_pipeline_task.delay(
-                        collection_name=RAG_COLLECTION_NAME,
+                        collection_name=collection_name,
                         db_path=RAG_DB_PATH,
                         input_dir=dir_name,
                     )
-                    asyncio.create_task(_sync_query_engine_state(pipeline_task.id))
+                    asyncio.create_task(
+                        _sync_query_engine_state(pipeline_task.id, collection_name)
+                    )
                     await queue.put(
                         {"type": "pipeline_started", "data": {"task_id": pipeline_task.id}}
                     )
@@ -82,8 +79,11 @@ async def run_etl_workflow(request: Request):
     homepage_url = req.get('homepage_url', '')
     if not homepage_url:
         return {"status": "failed", "message": "homepage_url not provided"}
+    if not is_safe_url(homepage_url):
+        return {"status": "failed", "message": "homepage_url is not a permitted public address"}
 
     job_id = str(uuid4())
+    collection_name = collection_name_for_url(homepage_url)
     agents, playwright_browser = await build_agents(use_playwright=True)
     try:
         wf = ETLWorkflow(
@@ -103,17 +103,24 @@ async def run_etl_workflow(request: Request):
         'finished': False,
         'final': None,
     }
-    asyncio.create_task(_drive_workflow(job_id, handler, playwright_browser))
-    return {"status": "success", "job_id": job_id, "message": "triggered workflow"}
+    asyncio.create_task(_drive_workflow(job_id, handler, playwright_browser, collection_name))
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "collection_name": collection_name,
+        "message": "triggered workflow",
+    }
     
 @app.get('/query/status')
-async def query_status():
-    query_engine = QueryEngine(
-        collection_name=RAG_COLLECTION_NAME,
-        db_path=RAG_DB_PATH,
-    )
+async def query_status(homepage_url: str = ''):
+    if not homepage_url:
+        return {"status": "failed", "message": "homepage_url query param not provided"}
+
+    collection_name = collection_name_for_url(homepage_url)
+    query_engine = QueryEngine(db_path=RAG_DB_PATH)
     return {
-        "ready": bool(query_engine.pipeline_run and query_engine.query_engine is not None),
+        "ready": query_engine.is_ready(collection_name),
+        "collection_name": collection_name,
     }
 
 
@@ -121,21 +128,22 @@ async def query_status():
 async def query_docs(request: Request):
     req = await request.json()
     question = req.get('query', '')
+    homepage_url = req.get('homepage_url', '')
     if not question:
         return {"status": "failed", "message": "query not provided"}
+    if not homepage_url:
+        return {"status": "failed", "message": "homepage_url not provided"}
 
-    query_engine = QueryEngine(
-        collection_name=RAG_COLLECTION_NAME,
-        db_path=RAG_DB_PATH,
-    )
-    if not query_engine.pipeline_run or query_engine.query_engine is None:
+    collection_name = collection_name_for_url(homepage_url)
+    query_engine = QueryEngine(db_path=RAG_DB_PATH)
+    if not query_engine.is_ready(collection_name):
         return {
             "status": "failed",
-            "message": "no ingested documents yet - run /etl_workflow/ and wait for the pipeline to finish before querying",
+            "message": "no ingested documents yet for this site - run /etl_workflow/ and wait for the pipeline to finish before querying",
         }
 
     try:
-        response = await query_engine.query_engine.aquery(question)
+        response = await query_engine.get_query_engine(collection_name).aquery(question)
     except Exception as ex:
         return {"status": "failed", "message": str(ex)}
 
