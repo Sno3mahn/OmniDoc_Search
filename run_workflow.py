@@ -2,12 +2,11 @@ from agentic_etl import (
     MDifyEvent, AnalyseTextEvent, ExtractWebpageEvent, StatusEmitterEvent, DirNameEvent, build_agents
 )
 from import_stuff import (
-    extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file
+    extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json
 )
 
 import os
 import re
-import json
 import requests
 from random import sample
 import argparse
@@ -61,8 +60,8 @@ class ETLWorkflow(Workflow):
                 await ctx.store.set('dir_name', f'{dir_name}_dir')
 
             res = await run_agent_verbose(self.agents["homepage_extraction_agent"], user_query)
-            
-            res = json.loads(str(res))
+
+            res = parse_agent_json(str(res), stage="homepage_extraction_agent")
             available_in_md = res.get("available_in_md", False)
             list_of_contents = res.get("list_of_contents", [])
             file_name_map = res.get("file_name_map", {})
@@ -96,7 +95,7 @@ class ETLWorkflow(Workflow):
 
         ctx.write_event_to_stream(StatusEmitterEvent(status="Scanning contents for md links"))
         res = await run_agent_verbose(self.agents["md_ify_agent"], user_query)
-        res = json.loads(str(res))
+        res = parse_agent_json(str(res), stage="md_ify_agent")
 
         html_to_md = res.get("html_to_md", {})
         if not html_to_md:
@@ -149,22 +148,29 @@ class ETLWorkflow(Workflow):
                     response = requests.get(alt_site, timeout=15)
                     status = response.status_code
                     if status != 200:
-                        return
+                        raise RuntimeError(f"HTTP {status} fetching both {site} and {alt_site}")
                     site=alt_site
                 else:
-                    return
+                    raise RuntimeError(f"HTTP {status} fetching {site}")
             content = extract_page_content([site])[0]
             write_to_file(content=content, dir_name=dir_name, file_name=file_name)
-            
+
+        failed = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
 
             future_to_url = {executor.submit(etl_per_site, url): url for url in list_of_contents}
             for future in concurrent.futures.as_completed(future_to_url):
                 url = future_to_url[future]
                 try:
-                    print(future.result())
+                    future.result()
                 except Exception as e:
                     print(f"{url} generated an exception: {e}")
+                    failed.append(f"{url} ({e})")
+
+        if failed:
+            ctx.write_event_to_stream(
+                StatusEmitterEvent(status=f"Failed to save {len(failed)} file(s): " + "; ".join(failed))
+            )
         ctx.write_event_to_stream(StatusEmitterEvent(status="Completed saving batch of files"))
         return DirNameEvent()
 

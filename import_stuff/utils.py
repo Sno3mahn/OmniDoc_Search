@@ -1,4 +1,6 @@
+import json
 import os
+import re
 from math import ceil
 from typing import Optional, List
 
@@ -8,6 +10,36 @@ from llama_index.core.agent.workflow import ToolCall, ToolCallResult, AgentStrea
 
 
 _NOT_PROVIDED = object()
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+
+
+def parse_agent_json(raw: str, stage: str) -> dict:
+    """Parses an agent's final answer as JSON, tolerating the two failure modes
+    LLMs actually produce: a ```json ... ``` fence, or prose wrapped around the
+    object. Raises a ValueError naming the stage on failure instead of letting
+    a raw JSONDecodeError (with no context on which agent produced it) bubble up.
+    """
+    text = raw.strip()
+    fence_match = _JSON_FENCE_RE.search(text)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(
+        f"{stage}: agent did not return parseable JSON. Raw output: {raw[:500]!r}"
+    )
 
 async def run_concurrent_workflows(list_of_contents: List[str],
                                    ctx: Context,
