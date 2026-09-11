@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 from celery.result import AsyncResult
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from run_workflow import ETLWorkflow
 from agentic_etl import build_agents, StatusEmitterEvent
@@ -24,6 +25,16 @@ API_KEY = os.getenv("API_KEY")
 active_wfs: Dict[str, Any] = {}
 RAG_DB_PATH = "./omnidoc_search.db"
 app = FastAPI()
+
+# The frontend dev server is a different origin (:5173 vs :8000), so the
+# browser needs these headers to allow the fetch calls. Explicit origins
+# rather than "*" - the API takes a credential in the X-API-Key header.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
+    allow_methods=["GET", "POST"],
+    allow_headers=["x-api-key", "content-type"],
+)
 
 
 def _key_fingerprint(key: str) -> str:
@@ -46,10 +57,23 @@ async def require_api_key(request: Request) -> str:
     return _key_fingerprint(provided)
 
 
+WS_SUBPROTOCOL = "omnidoc.v1"
+
+
 def _check_ws_api_key(ws: WebSocket) -> Optional[str]:
+    """Browsers can't set headers on a WebSocket, so a browser client passes the
+    key as the second Sec-WebSocket-Protocol entry ("omnidoc.v1, <key>") rather
+    than in a query string, which would end up in access logs. Non-browser
+    clients can still use a plain x-api-key header."""
     if not API_KEY:
         return None
+
     provided = ws.headers.get("x-api-key")
+    if not provided:
+        offered = [p.strip() for p in ws.headers.get("sec-websocket-protocol", "").split(",")]
+        if len(offered) >= 2 and offered[0] == WS_SUBPROTOCOL:
+            provided = offered[1]
+
     if not provided or not hmac.compare_digest(provided, API_KEY):
         return None
     return _key_fingerprint(provided)
@@ -69,17 +93,29 @@ async def health_check():
     return {"message": "OK"}
 
 
+def _emit(job_data: Dict[str, Any], msg: Optional[Dict[str, Any]]):
+    """Appends to the job's event log and fans the message out to every attached
+    WebSocket. A single shared queue was wrong: two connections to the same job
+    (a page refresh, a second tab, or React StrictMode's double-mount in dev)
+    both consume from it, so a disconnected-but-still-blocked handler can swallow
+    events the live one needed. Each connection now gets its own queue, and the
+    log lets a late joiner replay everything it missed."""
+    if msg is not None:
+        job_data['events'].append(msg)
+    for q in list(job_data['subscribers']):
+        q.put_nowait(msg)
+
+
 async def _drive_workflow(job_id: str, handler, playwright_browser, collection_name: str):
     """Runs independently of any WebSocket connection, so a client disconnecting
     mid-run can't cause the workflow to be abandoned or the Celery hand-off to be
     skipped. Owns the playwright browser's lifetime - it's only closed here, once
     the workflow has actually finished using it."""
     job_data = active_wfs[job_id]
-    queue: asyncio.Queue = job_data['queue']
     try:
         async for ev in handler.stream_events():
             if isinstance(ev, StatusEmitterEvent):
-                await queue.put({"type": "status", "data": ev.status})
+                _emit(job_data, {"type": "status", "data": ev.status})
             elif isinstance(ev, StopEvent):
                 res = json.loads(ev.result)
                 status = res.get("status", "")
@@ -94,21 +130,22 @@ async def _drive_workflow(job_id: str, handler, playwright_browser, collection_n
                     asyncio.create_task(
                         _sync_query_engine_state(pipeline_task.id, collection_name)
                     )
-                    await queue.put(
-                        {"type": "pipeline_started", "data": {"task_id": pipeline_task.id}}
+                    _emit(
+                        job_data,
+                        {"type": "pipeline_started", "data": {"task_id": pipeline_task.id}},
                     )
 
                 job_data['final'] = {"type": "done", "data": status}
-                await queue.put(job_data['final'])
+                _emit(job_data, job_data['final'])
         await handler
     except Exception as exc:
         job_data['final'] = {"type": "error", "data": str(exc)}
-        await queue.put(job_data['final'])
+        _emit(job_data, job_data['final'])
     finally:
         if playwright_browser is not None:
             await playwright_browser.close()
         job_data['finished'] = True
-        await queue.put(None)  # sentinel: tells any connected WS to stop reading
+        _emit(job_data, None)  # sentinel: tells attached WSs to stop reading
 
 
 @app.post('/etl_workflow/')
@@ -139,7 +176,8 @@ async def run_etl_workflow(request: Request, api_key: str = Depends(require_api_
 
     active_wfs[job_id] = {
         'handler': handler,
-        'queue': asyncio.Queue(),
+        'events': [],
+        'subscribers': set(),
         'finished': False,
         'final': None,
         'owner': api_key,
@@ -209,7 +247,10 @@ async def stream_events(ws: WebSocket, job_id: str):
         await ws.close(code=4401, reason="Missing or invalid API key")
         return
 
-    await ws.accept()
+    # A client that offered subprotocols needs one echoed back or the browser
+    # rejects the handshake.
+    offered_subprotocol = ws.headers.get("sec-websocket-protocol")
+    await ws.accept(subprotocol=WS_SUBPROTOCOL if offered_subprotocol else None)
     job_data = active_wfs.get(job_id)
     # Same "job not found" message for a missing job and for someone else's
     # job - distinguishing the two would let a caller enumerate other users'
@@ -219,20 +260,26 @@ async def stream_events(ws: WebSocket, job_id: str):
         await ws.close()
         return
 
-    # Job already finished before this client connected (e.g. reconnect after
-    # a drop) - replay the final message instead of blocking on an empty queue.
-    if job_data['finished']:
-        if job_data['final'] is not None:
-            await ws.send_json(job_data['final'])
-        await ws.close()
-        return
+    # Subscribe before snapshotting the log. There is no await between these
+    # two lines, so no event can slip into the gap - the snapshot holds
+    # everything emitted so far, and the queue gets everything after it, with
+    # no overlap and nothing dropped. A client reconnecting mid-run therefore
+    # replays the whole run rather than joining blind.
+    queue: asyncio.Queue = asyncio.Queue()
+    job_data['subscribers'].add(queue)
+    history = list(job_data['events'])
+    already_finished = job_data['finished']
 
-    queue: asyncio.Queue = job_data['queue']
     try:
-        while True:
-            msg = await queue.get()
-            if msg is None:
-                break
+        for msg in history:
             await ws.send_json(msg)
+        if not already_finished:
+            while True:
+                msg = await queue.get()
+                if msg is None:
+                    break
+                await ws.send_json(msg)
     except WebSocketDisconnect:
         pass
+    finally:
+        job_data['subscribers'].discard(queue)

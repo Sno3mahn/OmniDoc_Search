@@ -69,11 +69,32 @@ class QueryEngine:
         if db_path:
             self.db_path = db_path
 
+    def _collection_has_rows(self, collection_name: str) -> bool:
+        """Read-only existence check. Deliberately not _define_db, which creates
+        the collection as a side effect."""
+        try:
+            db = chromadb.PersistentClient(path=self.db_path)
+            if collection_name not in [c.name for c in db.list_collections()]:
+                return False
+            return db.get_collection(collection_name).count() > 0
+        except Exception:
+            return False
+
     def is_ready(self, collection_name: str) -> bool:
-        return bool(self._ready.get(collection_name)) and collection_name in self._query_engines
+        if self._ready.get(collection_name) and collection_name in self._query_engines:
+            return True
+        # The Chroma collection outlives this process, so readiness shouldn't
+        # depend solely on in-memory state: an API restart (or an ingestion
+        # that ran in a different process) would otherwise make an index that
+        # is sitting on disk look permanently unqueryable.
+        return self._collection_has_rows(collection_name)
 
     def get_query_engine(self, collection_name: str):
-        return self._query_engines.get(collection_name)
+        engine = self._query_engines.get(collection_name)
+        if engine is None and self._collection_has_rows(collection_name):
+            self._ready[collection_name] = True
+            engine = self.initialize_query_engine(collection_name)
+        return engine
 
     def _load_docs(self, input_dir: str = "save_dir"):
         reader = SimpleDirectoryReader(input_dir=input_dir)

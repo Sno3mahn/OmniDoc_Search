@@ -95,13 +95,24 @@ class ETLWorkflow(Workflow):
         ''' + '\'{"html_to_md": {"https://docs.some_framework.com/.../page":"https://raw.githubusercontent.com/.../page.md", ...}, "source_found": true/false}\''
 
         ctx.write_event_to_stream(StatusEmitterEvent(status="Scanning contents for md links"))
-        res = await run_agent_verbose(self.agents["md_ify_agent"], user_query)
-        res = parse_agent_json(str(res), stage="md_ify_agent")
+        # Finding raw markdown sources is an optimisation, not a prerequisite -
+        # the pages can still be extracted as rendered HTML. An off-schema answer
+        # or a malformed tool call from the agent (e.g. a tool call with null
+        # arguments, which makes llama-index raise on json.loads) must not take
+        # the whole run down with it.
+        try:
+            res = await run_agent_verbose(self.agents["md_ify_agent"], user_query)
+            res = parse_agent_json(str(res), stage="md_ify_agent")
+            html_to_md = res.get("html_to_md", {})
+            source_found = res.get("source_found", False)
+        except Exception as exc:
+            ctx.write_event_to_stream(StatusEmitterEvent(
+                status=f"Markdown source detection failed ({exc}); falling back to rendered pages"
+            ))
+            html_to_md, source_found = {}, False
 
-        html_to_md = res.get("html_to_md", {})
         if not html_to_md:
             html_to_md = {url: url for url in list_of_contents}
-        source_found = res.get("source_found", False)
         await ctx.store.set("html_to_md", html_to_md)
         ctx.write_event_to_stream(StatusEmitterEvent(status="Fetched md links"))
         ctx.write_event_to_stream(StatusEmitterEvent(status="Extracting content and saving files"))
@@ -114,9 +125,22 @@ class ETLWorkflow(Workflow):
 
         ctx.write_event_to_stream(StatusEmitterEvent(status="Analyzing patterns to determine start and end of text content of a page"))
         list_of_contents = await ctx.store.get("list_of_contents", [])
-        res = await run_agent_verbose(self.agents["pattern_matching_agent"], f'Go through the contents of the {sample(list_of_contents, 3)} and, find a pattern that can be used to clean the redundant sections of the docs, also verify the code you generate, using the tool provided to execute generated code. Final answer must only be a python code')
+        # Same reasoning as the md branch: generated cleanup code improves the
+        # saved markdown but isn't required to save it at all.
+        try:
+            sample_size = min(3, len(list_of_contents))
+            res = await run_agent_verbose(
+                self.agents["pattern_matching_agent"],
+                f'Go through the contents of the {sample(list_of_contents, sample_size)} and, find a pattern that can be used to clean the redundant sections of the docs, also verify the code you generate, using the tool provided to execute generated code. Final answer must only be a python code',
+            )
+            clean_up_code = str(res)
+        except Exception as exc:
+            ctx.write_event_to_stream(StatusEmitterEvent(
+                status=f"Pattern detection failed ({exc}); saving pages without cleanup"
+            ))
+            clean_up_code = ''
         ctx.write_event_to_stream(StatusEmitterEvent(status="Extracting content and saving files"))
-        await run_concurrent_workflows(list_of_contents=list_of_contents, ctx=ctx, send_to_event=ExtractWebpageEvent, stream_to_event=StatusEmitterEvent, clean_up_code=str(res), batch_size=4)
+        await run_concurrent_workflows(list_of_contents=list_of_contents, ctx=ctx, send_to_event=ExtractWebpageEvent, stream_to_event=StatusEmitterEvent, clean_up_code=clean_up_code, batch_size=4)
         # return ExtractWebpageEvent(clean_up_code=str(res))
 
     @step(num_workers=6)

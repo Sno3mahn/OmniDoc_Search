@@ -58,7 +58,7 @@ async def run_concurrent_workflows(list_of_contents: List[str],
     await ctx.store.set('list_of_contents', list_of_contents)
     
     for i in range(0, len_loc, batch_size):
-        ctx.write_event_to_stream(stream_to_event(status=f"Saving batch {i//batch_size} of {num_conc_running_events}"))
+        ctx.write_event_to_stream(stream_to_event(status=f"Saving batch {i//batch_size + 1} of {num_conc_running_events}"))
         batch_of_contents = list_of_contents[i:i+batch_size]
         batch_of_md_dict = {src: html_to_md.get(src, src) for src in batch_of_contents}
         if clean_up_code is _NOT_PROVIDED:

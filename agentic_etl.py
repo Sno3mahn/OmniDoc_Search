@@ -14,7 +14,7 @@ DEEPSEEK_KEY = os.getenv('API_DEEPSEEK')
 
 from llama_index.core.workflow import Event
 from llama_index.core.tools import FunctionTool
-from llama_index.core.agent.workflow import FunctionAgent, ReActAgent
+from llama_index.core.agent.workflow import ReActAgent
 # from llama_index.readers.web import SimpleWebPageReader
 from llama_index.llms.deepseek import DeepSeek
 from llama_index.tools.playwright import PlaywrightToolSpec
@@ -76,7 +76,14 @@ async def build_agents(use_playwright: bool = True) -> Tuple[Dict[str, Any], Any
             system_prompt=HOMEPAGE_EXTRACTION_PROMPT,
             tools=fetch_tools_with_fallback,
         ),
-        "md_ify_agent": FunctionAgent(
+        # ReActAgent, not FunctionAgent: FunctionAgent requires
+        # llm.metadata.is_function_calling_model, which the llama-index DeepSeek
+        # integration reports False for deepseek-v4-flash (it isn't in the
+        # integration's known-models list). With FunctionAgent this step raised
+        # "LLM must be a FunctionCallingLLM" on every single run, so markdown
+        # source detection never actually ran. ReAct uses text-based reasoning
+        # and works with this LLM, same as the other two agents here.
+        "md_ify_agent": ReActAgent(
             name="md_ify_agent",
             description="Amends links to list of contents to md or txt or similar format of the page and notify if task was a success or not",
             llm=llm,
