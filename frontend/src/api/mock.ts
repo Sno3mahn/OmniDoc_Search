@@ -15,9 +15,9 @@ const SCRIPT: Array<{ after: number; ev: StreamEvent }> = [
   { after: 900, ev: { type: 'status', data: 'Scanning contents for md links' } },
   { after: 2200, ev: { type: 'status', data: 'Fetched md links' } },
   { after: 700, ev: { type: 'status', data: 'Extracting content and saving files' } },
-  { after: 500, ev: { type: 'status', data: 'Saving batch 0 of 3' } },
-  { after: 300, ev: { type: 'status', data: 'Saving batch 1 of 3' } },
+  { after: 500, ev: { type: 'status', data: 'Saving batch 1 of 3' } },
   { after: 300, ev: { type: 'status', data: 'Saving batch 2 of 3' } },
+  { after: 300, ev: { type: 'status', data: 'Saving batch 3 of 3' } },
   { after: 1500, ev: { type: 'status', data: 'Completed saving batch of files' } },
   { after: 1100, ev: { type: 'status', data: 'Completed saving batch of files' } },
   {
@@ -33,8 +33,46 @@ const SCRIPT: Array<{ after: number; ev: StreamEvent }> = [
   { after: 3000, ev: { type: 'done', data: 'partial success- 1 files missing' } },
 ]
 
-const MOCK_ANSWER =
-  'Middleware in this framework runs before the route handler, and receives the request plus a `next` callback. Register it with `app.use()` for every route, or pass it per-route as the second argument. Ordering matters: middleware registered first runs first, and a middleware that never calls `next()` short-circuits the chain.'
+interface CannedAnswer {
+  match: RegExp
+  answer: string
+  sources: Array<{ text: string; score: number }>
+}
+
+/** A few keyed answers so a demo asking two questions doesn't obviously replay
+ *  one canned string. Falls back to the middleware answer. */
+const ANSWERS: CannedAnswer[] = [
+  {
+    match: /auth|token|login|session/i,
+    answer:
+      'Authentication is handled by a middleware that reads the `Authorization` header and attaches the resolved user to `request.state.user`. Tokens are verified against the signing key on every request — there is no server-side session store, so revocation is handled by keeping token lifetimes short rather than by invalidating a session record.',
+    sources: [
+      { text: '# Authentication\n\nEvery request carries a bearer token in the Authorization header...', score: 0.88 },
+      { text: '## Token lifetime\n\nAccess tokens expire after 15 minutes. Refresh tokens...', score: 0.71 },
+    ],
+  },
+  {
+    match: /deploy|production|build|docker/i,
+    answer:
+      'For production, build the app with `npm run build` and serve the generated `dist/` directory from any static host. The server component expects `DATABASE_URL` and `SECRET_KEY` to be present in the environment at boot — it fails fast rather than starting with defaults.',
+    sources: [
+      { text: '# Deployment\n\nBuild output is fully static and can be served from a CDN...', score: 0.79 },
+      { text: '## Required environment\n\nDATABASE_URL, SECRET_KEY, and optionally SENTRY_DSN...', score: 0.68 },
+      { text: '### Health checks\n\nThe /healthz endpoint returns 200 once migrations have applied...', score: 0.55 },
+    ],
+  },
+]
+
+const DEFAULT_ANSWER: CannedAnswer = {
+  match: /.*/,
+  answer:
+    'Middleware runs before the route handler and receives the request plus a `next` callback. Register it with `app.use()` to apply it to every route, or pass it per-route as the second argument. Ordering matters — middleware registered first runs first, and any middleware that never calls `next()` short-circuits the rest of the chain.',
+  sources: [
+    { text: '# Middleware\n\nMiddleware functions receive the request object and a next callback...', score: 0.82 },
+    { text: '## Registering middleware\n\nUse app.use(fn) to apply a function globally...', score: 0.74 },
+    { text: '### Ordering\n\nMiddleware executes in registration order. Short-circuiting...', score: 0.61 },
+  ],
+}
 
 export class MockClient implements OmniDocClient {
   async startJob(homepageUrl: string): Promise<StartJobResponse> {
@@ -75,15 +113,8 @@ export class MockClient implements OmniDocClient {
 
   async query(_homepageUrl: string, question: string): Promise<QueryResponse> {
     await delay(1400)
-    return {
-      status: 'success',
-      answer: MOCK_ANSWER,
-      sources: [
-        { text: `# Middleware\n\nMiddleware functions receive the request object...`, score: 0.82 },
-        { text: `## Registering middleware\n\nUse app.use(fn) to apply globally...`, score: 0.74 },
-        { text: `### Ordering\n\nMiddleware executes in registration order...`, score: 0.61 },
-      ].filter(() => question.length > 0),
-    }
+    const hit = ANSWERS.find((a) => a.match.test(question)) ?? DEFAULT_ANSWER
+    return { status: 'success', answer: hit.answer, sources: hit.sources }
   }
 }
 

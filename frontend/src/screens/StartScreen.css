@@ -33,7 +33,7 @@
 
 .start__title {
   margin: 0 0 14px;
-  font-size: 40px;
+  font-size: clamp(28px, 4.2vw, 42px);
   font-weight: 600;
   letter-spacing: var(--track-display);
   line-height: 1.12;
@@ -211,4 +211,21 @@
   padding-right: 14px;
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+/* The url + key + button row can't stay on one line on a narrow window -
+   without this the key field and button overflow the viewport. */
+@media (max-width: 860px) {
+  .start__row {
+    flex-wrap: wrap;
+  }
+
+  .keyfield,
+  .start__row .cmd {
+    width: 100%;
+  }
+
+  .start__row .prompt {
+    flex-basis: 100%;
+  }
 }

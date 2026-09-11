@@ -172,12 +172,36 @@
   flex: 1;
 }
 
+/* Column header - the right-hand numbers mean different things on stage rows
+   (a duration) and event lines (an offset from run start, prefixed with +),
+   so the columns get named once rather than left to be inferred. */
+.tl__head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 0 0 10px 28px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
+}
+
+.tl__head-label,
+.tl__head .stage__stat,
+.tl__head .stage__dur {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: var(--track-mono-label);
+  text-transform: uppercase;
+  color: var(--text-lo);
+}
+
 .stage__stat {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-lo);
+  min-width: 72px;
+  text-align: right;
 }
 
 .stage__dur {
@@ -191,6 +215,12 @@
 
 .stage__body {
   padding-bottom: 22px;
+}
+
+/* A stage with no events yet shouldn't reserve the same air as one with a
+   log under it - pending rows read as a compact list instead. */
+.stage__body:empty {
+  padding-bottom: 8px;
 }
 
 .stage:last-child .stage__body {
@@ -313,4 +343,26 @@
 
 .linkish:hover {
   color: var(--text-hi);
+}
+
+@media (max-width: 820px) {
+  .runhead {
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .clock {
+    font-size: 24px;
+  }
+
+  .runhead__meta {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .result {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
 }

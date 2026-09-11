@@ -67,6 +67,13 @@ export function PipelineScreen({ jobId, homepageUrl, apiKey, collection, onReset
           <div className={`clock ${run.finished ? '' : 'clock--running'}`}>{fmtClock(shown)}</div>
         </header>
 
+        <div className="tl__head">
+          <span className="tl__head-label">stage</span>
+          <span className="stage__spacer" />
+          <span className="stage__stat">status</span>
+          <span className="stage__dur">duration</span>
+        </div>
+
         <div>
           {STAGE_ORDER.map((id) => (
             <StageBlock key={id} stage={run.stages[id]} />
@@ -117,7 +124,7 @@ function StageBlock({ stage }: { stage: StageState }) {
           <div key={e.id} className={`line ${e.error ? 'line--error' : ''}`}>
             <span className="line__glyph">{e.error ? '✕' : '│'}</span>
             <span className="line__text">{e.text}</span>
-            <span className="line__at">{fmtElapsed(e.at)}</span>
+            <span className="line__at">+{fmtElapsed(e.at)}</span>
           </div>
         ))}
       </div>

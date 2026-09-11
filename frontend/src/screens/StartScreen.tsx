@@ -86,7 +86,7 @@ export function StartScreen({ onStarted }: Props) {
           </div>
 
           <button className="cmd" disabled={!canRun} onClick={run}>
-            {busy ? 'Starting…' : 'Run pipeline ⏎'}
+            {busy ? 'Starting…' : <>Run pipeline<span className="cmd__kbd">⏎</span></>}
           </button>
         </div>
 

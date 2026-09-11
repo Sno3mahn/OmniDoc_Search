@@ -28,6 +28,62 @@ input {
   color: inherit;
 }
 
+/* Keyboard focus has to be visible - the inputs only signalled focus via
+   :focus-within on their container, and the buttons signalled nothing. */
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
+/* These inputs sit inside a container that already turns amber on
+   :focus-within - an outline on top of that reads as a double ring. */
+.prompt__input:focus-visible {
+  outline: none;
+}
+
+::selection {
+  background: var(--amber);
+  color: var(--ink-900);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-bright) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-bright);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-lo);
+}
+
+/* The running state stays legible without motion - it's carried by the amber
+   colour too, not the pulse alone. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Enter-key affordance inside command buttons */
+.cmd__kbd {
+  opacity: 0.5;
+  font-size: 11px;
+  margin-left: 6px;
+}
+
 /* Shared primitives -------------------------------------------------- */
 
 .mono-label {
