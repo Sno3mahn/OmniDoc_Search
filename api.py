@@ -209,30 +209,44 @@ async def query_docs(request: Request, api_key: str = Depends(require_api_key)):
 
     req = await request.json()
     question = req.get('query', '')
-    homepage_url = req.get('homepage_url', '')
+    # Accepts one URL or many. Many is the interesting case: asking a question
+    # that spans two projects' docs is the thing no single vendor's built-in
+    # docs search can answer, because each only owns its own corpus.
+    urls = req.get('homepage_urls') or ([req['homepage_url']] if req.get('homepage_url') else [])
     if not question:
         return {"status": "failed", "message": "query not provided"}
-    if not homepage_url:
-        return {"status": "failed", "message": "homepage_url not provided"}
+    if not urls:
+        return {"status": "failed", "message": "homepage_url(s) not provided"}
 
-    collection_name = collection_name_for_url(homepage_url)
     query_engine = QueryEngine(db_path=RAG_DB_PATH)
-    if not query_engine.is_ready(collection_name):
+    collections = [collection_name_for_url(u) for u in urls]
+    missing = [u for u, c in zip(urls, collections) if not query_engine.is_ready(c)]
+    if missing:
         return {
             "status": "failed",
-            "message": "no ingested documents yet for this site - run /etl_workflow/ and wait for the pipeline to finish before querying",
+            "message": f"no ingested documents yet for: {', '.join(missing)} - run /etl_workflow/ for each first",
         }
 
     try:
-        response = await query_engine.get_query_engine(collection_name).aquery(question)
+        if len(collections) == 1:
+            engine = query_engine.get_query_engine(collections[0])
+        else:
+            engine = query_engine.build_multi_query_engine(collections)
+        response = await engine.aquery(question)
     except Exception as ex:
         return {"status": "failed", "message": str(ex)}
 
     return {
         "status": "success",
         "answer": str(response),
+        "collections": collections,
         "sources": [
-            {"text": node.node.get_content()[:500], "score": node.score}
+            {
+                "text": node.node.get_content()[:500],
+                "score": node.score,
+                "source": node.node.metadata.get("source", ""),
+                "collection": node.node.metadata.get("collection", collections[0]),
+            }
             for node in getattr(response, "source_nodes", [])
         ],
     }

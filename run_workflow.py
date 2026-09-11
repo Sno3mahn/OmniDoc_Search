@@ -3,7 +3,7 @@ from agentic_etl import (
 )
 from import_stuff import (
     extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json,
-    is_safe_url, resolve_markdown_sources,
+    is_safe_url, resolve_markdown_sources, looks_like_markdown, strip_common_boilerplate,
 )
 
 import os
@@ -174,7 +174,15 @@ class ETLWorkflow(Workflow):
                     site=alt_site
                 else:
                     raise RuntimeError(f"HTTP {status} fetching {site}")
-            content = extract_page_content([site])[0]
+            # If the source is already markdown, keep it verbatim. Running it
+            # through SimpleWebPageReader(html_to_text=True) converts markdown
+            # as if it were HTML, which escapes frontmatter into "\--- title:"
+            # and mangles fences - degrading the exact clean source the md
+            # resolver worked to find.
+            if looks_like_markdown(response.text, response.headers.get("content-type")):
+                content = response.text
+            else:
+                content = extract_page_content([site])[0]
             write_to_file(content=content, dir_name=dir_name, file_name=file_name)
 
         failed = []
@@ -210,6 +218,17 @@ class ETLWorkflow(Workflow):
         list_of_contents = await ctx.store.get('list_of_contents')
         dir_name = await ctx.store.get('dir_name', 'saved_dir')
         ctx.write_event_to_stream(StatusEmitterEvent(status="Saved all files"))
+
+        # Runs here rather than per-page because it needs the whole corpus:
+        # "appears on most pages" is only knowable once every page is on disk.
+        loop = asyncio.get_running_loop()
+        removed, touched = await loop.run_in_executor(
+            None, strip_common_boilerplate, dir_name
+        )
+        if removed:
+            ctx.write_event_to_stream(StatusEmitterEvent(
+                status=f"Stripped {removed} boilerplate lines from {touched} file(s)"
+            ))
 
         if os.path.isdir(dir_name):
             if len(os.listdir(dir_name)) == len(list_of_contents):

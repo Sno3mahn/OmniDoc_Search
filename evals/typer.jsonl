@@ -1,0 +1,52 @@
+{"question": "Where can I find a comparison of Typer with other CLI libraries?", "gold": "about.md"}
+{"question": "Where can I find information about managing the Typer repository?", "gold": "about.md"}
+{"question": "What previous tools inspired Typer?", "gold": "alternatives.md"}
+{"question": "What did Typer learn from argparse?", "gold": "alternatives.md"}
+{"question": "How can I test Typer shell completion for bash, zsh, fish, and PowerShell?", "gold": "contributing.md"}
+{"question": "Where can I find the Docker Compose setup for testing Typer completion, and what tools does it include?", "gold": "contributing.md"}
+{"question": "How does Typer relate to FastAPI?", "gold": "features.md"}
+{"question": "Do I need to learn new syntax to use Typer?", "gold": "features.md"}
+{"question": "How can I get notified about new Typer releases?", "gold": "help-typer.md"}
+{"question": "How can I support the Typer project?", "gold": "help-typer.md"}
+{"question": "Who is in charge of the Typer project and how are pull requests approved?", "gold": "management.md"}
+{"question": "Who helps maintain the Typer repository and where can I find more information about the team?", "gold": "management.md"}
+{"question": "How do I invoke another command from inside a Typer command?", "gold": "reference-context.md"}
+{"question": "How can I share data between multiple commands in Typer?", "gold": "reference-context.md"}
+{"question": "How do I read a text file as a file-like object in Typer?", "gold": "reference-file-objects.md"}
+{"question": "Where do I import Typer's special file types from?", "gold": "reference-file-objects.md"}
+{"question": "How do I define a CLI argument and an option in a Typer command?", "gold": "reference-parameters.md"}
+{"question": "How do I set a minimum or maximum value for a Typer option?", "gold": "reference-parameters.md"}
+{"question": "How do I turn a function into a command-line app and execute it with Typer?", "gold": "reference-run-launch.md"}
+{"question": "Where can I import `run` and `launch` from in Typer?", "gold": "reference-run-launch.md"}
+{"question": "How do I turn a Python function into a CLI command?", "gold": "reference-typer.md"}
+{"question": "How do I add a callback that runs before every command?", "gold": "reference-typer.md"}
+{"question": "Where can I find the API docs for Typer's classes, functions, parameters, and attributes?", "gold": "reference.md"}
+{"question": "What should I read if I want to learn Typer rather than just look up its API?", "gold": "reference.md"}
+{"question": "What's the latest version of Typer and when was it released?", "gold": "release-notes.md"}
+{"question": "Which Typer versions include breaking changes?", "gold": "release-notes.md"}
+{"question": "Where can I get help if I'm stuck using Typer?", "gold": "resources.md"}
+{"question": "How can I contribute to Typer?", "gold": "resources.md"}
+{"question": "how do I get the appropriate directory for storing configuration files for my CLI app on different operating systems?", "gold": "tutorial-app-dir.md"}
+{"question": "how do I combine a directory path with a filename in a cross-platform way in Python?", "gold": "tutorial-app-dir.md"}
+{"question": "How do I set a default value for a CLI argument in Typer?", "gold": "tutorial-arguments-default.md"}
+{"question": "Why shouldn't I use Optional[str] when a Typer argument has a non-None default value?", "gold": "tutorial-arguments-default.md"}
+{"question": "How do I make a CLI argument read from an environment variable if it's not passed on the command line?", "gold": "tutorial-arguments-envvar.md"}
+{"question": "How can I hide an environment variable from the CLI help text?", "gold": "tutorial-arguments-envvar.md"}
+{"question": "How do I provide help text for an argument when my function already has a docstring?", "gold": "tutorial-arguments-help.md"}
+{"question": "How can I change the name displayed for an argument in the help output?", "gold": "tutorial-arguments-help.md"}
+{"question": "What's the difference between CLI arguments and CLI options in terms of being required in Typer?", "gold": "tutorial-arguments-optional.md"}
+{"question": "How can I let users skip an argument when running my Typer CLI?", "gold": "tutorial-arguments-optional.md"}
+{"question": "What else can I use typer.Argument() for besides just defining a CLI argument?", "gold": "tutorial-arguments-other-uses.md"}
+{"question": "Can typer.Argument() be used for data validation or to enable other features?", "gold": "tutorial-arguments-other-uses.md"}
+{"question": "What are some ways to customize command-line arguments in Typer?", "gold": "tutorial-arguments.md"}
+{"question": "Does Typer let me use environment variables for command-line arguments?", "gold": "tutorial-arguments.md"}
+{"question": "Why did Typer stop depending on Click as an external package?", "gold": "tutorial-click.md"}
+{"question": "What should I do if my Typer app relied on extracting the internal Click app to add Click-specific plugins?", "gold": "tutorial-click.md"}
+{"question": "How can each command in my Typer app take its own input value?", "gold": "tutorial-commands-arguments.md"}
+{"question": "How do I run a specific command and pass it a value from the terminal?", "gold": "tutorial-commands-arguments.md"}
+{"question": "How do I add CLI options to the main Typer app instead of each command?", "gold": "tutorial-commands-callback.md"}
+{"question": "What's the difference between @app.callback() and @app.command()?", "gold": "tutorial-commands-callback.md"}
+{"question": "How do I access the Typer context inside a command or callback function?", "gold": "tutorial-commands-context.md"}
+{"question": "How can I get the name of the subcommand that is being executed in a Typer callback?", "gold": "tutorial-commands-context.md"}
+{"question": "How do I add help text to a command in Typer?", "gold": "tutorial-commands-help.md"}
+{"question": "How can I mark a command as deprecated in Typer?", "gold": "tutorial-commands-help.md"}
