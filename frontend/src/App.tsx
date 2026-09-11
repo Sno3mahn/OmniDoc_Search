@@ -7,9 +7,8 @@ import { QueryScreen } from './screens/QueryScreen'
 /** jobId is optional: an already-indexed site can be opened straight into the
  *  query view without paying for a pipeline run. */
 interface Session {
-  homepageUrl: string
+  sources: Array<{ homepageUrl: string; collection: string }>
   apiKey: string
-  collection: string
   jobId?: string
 }
 
@@ -35,11 +34,15 @@ export function App() {
       {view === 'start' && (
         <StartScreen
           onStarted={(j) => {
-            setSession(j)
+            setSession({
+              sources: [{ homepageUrl: j.homepageUrl, collection: j.collection }],
+              apiKey: j.apiKey,
+              jobId: j.jobId,
+            })
             setView('pipeline')
           }}
           onOpenExisting={(t) => {
-            setSession(t)
+            setSession({ sources: t.sources, apiKey: t.apiKey })
             setView('query')
           }}
         />
@@ -52,9 +55,9 @@ export function App() {
         <div style={{ display: view === 'pipeline' ? 'contents' : 'none' }}>
           <PipelineScreen
             jobId={session.jobId}
-            homepageUrl={session.homepageUrl}
+            homepageUrl={session.sources[0].homepageUrl}
             apiKey={session.apiKey}
-            collection={session.collection}
+            collection={session.sources[0].collection}
             onReset={() => {
               setSession(null)
               setView('start')
@@ -66,9 +69,8 @@ export function App() {
 
       {view === 'query' && session && (
         <QueryScreen
-          homepageUrl={session.homepageUrl}
+          sources={session.sources}
           apiKey={session.apiKey}
-          collection={session.collection}
           hasRun={Boolean(session.jobId)}
           onBack={() => {
             if (session.jobId) {

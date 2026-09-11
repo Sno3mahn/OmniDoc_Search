@@ -18,6 +18,10 @@ export type StreamEvent =
 export interface QuerySource {
   text: string
   score: number | null
+  /** Page the chunk came from, and which doc set it belongs to. Both matter
+   *  once a query spans more than one source. */
+  source?: string
+  collection?: string
 }
 
 export interface QueryResponse {
@@ -39,7 +43,9 @@ export interface QueryStatus {
 export interface OmniDocClient {
   startJob(homepageUrl: string, apiKey: string): Promise<StartJobResponse>
   subscribeJob(jobId: string, apiKey: string, onEvent: (ev: StreamEvent) => void): JobStream
-  query(homepageUrl: string, question: string, apiKey: string): Promise<QueryResponse>
+  /** Takes several sources: a question spanning two projects' docs is the case
+   *  no single vendor's built-in docs search can serve. */
+  query(homepageUrls: string[], question: string, apiKey: string): Promise<QueryResponse>
   /** Whether this site already has a queryable index, so it can be opened
    *  without paying for a full re-extraction. */
   queryStatus(homepageUrl: string, apiKey: string): Promise<QueryStatus>

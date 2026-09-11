@@ -1,15 +1,15 @@
 from agentic_etl import (
-    MDifyEvent, AnalyseTextEvent, ExtractWebpageEvent, StatusEmitterEvent, DirNameEvent, build_agents
+    MDifyEvent, ExtractWebpageEvent, StatusEmitterEvent, DirNameEvent, build_agents
 )
 from import_stuff import (
     extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json,
     is_safe_url, resolve_markdown_sources, looks_like_markdown, strip_common_boilerplate,
+    get_html_body, extract_toc, file_name_for,
 )
 
 import os
 import re
 import requests
-from random import sample
 import argparse
 import concurrent
 import asyncio
@@ -26,7 +26,7 @@ class ETLWorkflow(Workflow):
         self.homepage_url = homepage_url
 
     @step
-    async def read_homepage_content(self, ctx: Context, ev: StartEvent) -> MDifyEvent | AnalyseTextEvent:
+    async def read_homepage_content(self, ctx: Context, ev: StartEvent) -> MDifyEvent:
             user_query = f'''
                 Use your tools to fully analyze the homepage: {self.homepage_url}
 
@@ -56,25 +56,59 @@ class ETLWorkflow(Workflow):
             '''
             ctx.write_event_to_stream(StatusEmitterEvent(status="Reading content from homepage"))
             match = re.search(r'(?:https?://)?(?:[\w-]+\.)*([\w-]+)\.[a-z]{2,}', self.homepage_url)
-            if match:
-                dir_name = match.group(1)
-                await ctx.store.set('dir_name', f'{dir_name}_dir')
+            dir_name = f'{match.group(1)}_dir' if match else 'save_dir'
+            await ctx.store.set('dir_name', dir_name)
 
-            res = await run_agent_verbose(self.agents["homepage_extraction_agent"], user_query)
+            # Clear stale output from a previous run of this same site. Without
+            # this, files from an earlier extraction (different TOC, different
+            # filenames) survive and get ingested alongside the new ones, and
+            # the completion count compares against a directory that holds more
+            # files than this run produced.
+            if os.path.isdir(dir_name):
+                for stale in os.listdir(dir_name):
+                    path = os.path.join(dir_name, stale)
+                    if os.path.isfile(path):
+                        os.remove(path)
 
-            res = parse_agent_json(str(res), stage="homepage_extraction_agent")
-            available_in_md = res.get("available_in_md", False)
-            list_of_contents = res.get("list_of_contents", [])
-            file_name_map = res.get("file_name_map", {})
-            
-            await ctx.store.set("available_in_md", available_in_md)
+            # Fast path: a docs sidebar is structured HTML, so parse it. This was
+            # ~84s of a ~139s pipeline as a ReAct loop; it is milliseconds as a
+            # parse, and on the sites tested it returns the same page set.
+            loop = asyncio.get_running_loop()
+            list_of_contents, file_name_map = [], {}
+            try:
+                html = await loop.run_in_executor(None, get_html_body, self.homepage_url)
+                list_of_contents, file_name_map = extract_toc(self.homepage_url, html or "")
+            except Exception as exc:
+                ctx.write_event_to_stream(StatusEmitterEvent(
+                    status=f"Homepage parse failed ({exc}); handing off to the extraction agent"
+                ))
+
+            if list_of_contents:
+                ctx.write_event_to_stream(StatusEmitterEvent(
+                    status=f"Parsed {len(list_of_contents)} doc pages from the homepage nav"
+                ))
+            else:
+                # Fallback for markup the parser can't read (JS-rendered nav,
+                # unusual structure) - this is where the agent earns its cost.
+                ctx.write_event_to_stream(StatusEmitterEvent(
+                    status="No nav found by parsing; using the extraction agent"
+                ))
+                res = await run_agent_verbose(self.agents["homepage_extraction_agent"], user_query)
+                res = parse_agent_json(str(res), stage="homepage_extraction_agent")
+                list_of_contents = res.get("list_of_contents", [])
+                file_name_map = res.get("file_name_map", {}) or {
+                    url: file_name_for(url) for url in list_of_contents
+                }
+
             await ctx.store.set("list_of_contents", list_of_contents)
             await ctx.store.set("file_name_map", file_name_map)
-            
+
             ctx.write_event_to_stream(StatusEmitterEvent(status="Analyzed homepage content"))
-            if available_in_md:
-                return MDifyEvent()
-            return AnalyseTextEvent()
+            # Always the md path now: resolve_markdown_sources decides
+            # deterministically whether raw sources exist and falls back to
+            # rendered pages when they don't, so there is nothing for the LLM
+            # to predict here.
+            return MDifyEvent()
 
     @step
     async def get_markdown_links(self, ctx: Context, ev: MDifyEvent) -> ExtractWebpageEvent | None:
@@ -112,29 +146,6 @@ class ETLWorkflow(Workflow):
 
         await run_concurrent_workflows(list_of_contents=list_of_contents, ctx=ctx, send_to_event=ExtractWebpageEvent, stream_to_event=StatusEmitterEvent, source_found=source_found, batch_size=4)
         # return ExtractWebpageEvent(source_found=source_found)
-
-    @step
-    async def get_pattern(self, ctx: Context, ev: AnalyseTextEvent) -> ExtractWebpageEvent | None:
-
-        ctx.write_event_to_stream(StatusEmitterEvent(status="Analyzing patterns to determine start and end of text content of a page"))
-        list_of_contents = await ctx.store.get("list_of_contents", [])
-        # Same reasoning as the md branch: generated cleanup code improves the
-        # saved markdown but isn't required to save it at all.
-        try:
-            sample_size = min(3, len(list_of_contents))
-            res = await run_agent_verbose(
-                self.agents["pattern_matching_agent"],
-                f'Go through the contents of the {sample(list_of_contents, sample_size)} and, find a pattern that can be used to clean the redundant sections of the docs, also verify the code you generate, using the tool provided to execute generated code. Final answer must only be a python code',
-            )
-            clean_up_code = str(res)
-        except Exception as exc:
-            ctx.write_event_to_stream(StatusEmitterEvent(
-                status=f"Pattern detection failed ({exc}); saving pages without cleanup"
-            ))
-            clean_up_code = ''
-        ctx.write_event_to_stream(StatusEmitterEvent(status="Extracting content and saving files"))
-        await run_concurrent_workflows(list_of_contents=list_of_contents, ctx=ctx, send_to_event=ExtractWebpageEvent, stream_to_event=StatusEmitterEvent, clean_up_code=clean_up_code, batch_size=4)
-        # return ExtractWebpageEvent(clean_up_code=str(res))
 
     @step(num_workers=6)
     async def save_files(self, ctx: Context, ev: ExtractWebpageEvent ) -> DirNameEvent: 
@@ -230,11 +241,20 @@ class ETLWorkflow(Workflow):
                 status=f"Stripped {removed} boilerplate lines from {touched} file(s)"
             ))
 
-        if os.path.isdir(dir_name):
-            if len(os.listdir(dir_name)) == len(list_of_contents):
-                return StopEvent(result='{"status":"success","dir_name":"'+dir_name+'"}')
-            return StopEvent(result='{"status":"'+ f'partial success- {len(list_of_contents)-len(os.listdir(dir_name))} files missing' +'","dir_name":"'+dir_name+'"}')
-        return StopEvent(result='{"status":"failed","dir_name":"unavailable dir"}')
+        if not os.path.isdir(dir_name):
+            return StopEvent(result='{"status":"failed","dir_name":"unavailable dir"}')
+
+        # Compare the filenames this run expected against what's on disk, not
+        # raw counts - a count comparison reported "-41 files missing" when the
+        # directory held leftovers from an earlier extraction.
+        file_name_map = await ctx.store.get('file_name_map', {})
+        expected = set(file_name_map.values()) or {f'{i}' for i in range(len(list_of_contents))}
+        present = set(os.listdir(dir_name))
+        missing = len(expected - present)
+
+        if missing == 0:
+            return StopEvent(result='{"status":"success","dir_name":"'+dir_name+'"}')
+        return StopEvent(result='{"status":"'+ f'partial success- {missing} of {len(expected)} files missing' +'","dir_name":"'+dir_name+'"}')
 
 
 

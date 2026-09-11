@@ -4,3 +4,4 @@ from .tools import extract_page_content, get_html_body, sandboxed_code_interpret
 from .security import is_safe_url
 from .md_source import resolve_markdown_sources, looks_like_markdown
 from .boilerplate import strip_common_boilerplate, find_boilerplate_lines
+from .toc import extract_toc, file_name_for

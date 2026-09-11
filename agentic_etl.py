@@ -1,6 +1,6 @@
 from import_stuff import (
-    PATTERN_MATCHING_PROMPT, HOMEPAGE_EXTRACTION_PROMPT,
-    get_html_body, extract_page_content, sandboxed_code_interpreter,
+    HOMEPAGE_EXTRACTION_PROMPT,
+    get_html_body, extract_page_content,
 )
 
 import os
@@ -82,23 +82,8 @@ async def build_agents(use_playwright: bool = True) -> Tuple[Dict[str, Any], Any
         # agent was being handed every URL on the site and asked to browse each
         # one - hundreds of LLM calls for a single rule - and MD_IFICATION_PROMPT
         # is kept in prompts.py only for reference.
-        "pattern_matching_agent": ReActAgent(
-            name="pattern_matching_agent",
-            description="Returns python code to clean up md files after identifying patterns in the homepage",
-            llm=llm,
-            system_prompt=PATTERN_MATCHING_PROMPT,
-            tools=[
-                FunctionTool.from_defaults(extract_page_content),
-                FunctionTool.from_defaults(sandboxed_code_interpreter),
-            ],
-        ),
     }, browser
 
-
-class AnalyseTextEvent(Event):
-    # list_of_contents: List[str] | None = None
-    pass
-    # available_in_md: bool
 
 class MDifyEvent(Event):
     pass

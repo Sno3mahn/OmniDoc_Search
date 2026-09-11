@@ -4,10 +4,14 @@ import type { StartJobResponse } from '../api/types'
 import { STAGE_ORDER } from '../lib/stages'
 import './StartScreen.css'
 
-export interface OpenTarget {
+export interface DocSource {
   homepageUrl: string
-  apiKey: string
   collection: string
+}
+
+export interface OpenTarget {
+  apiKey: string
+  sources: DocSource[]
 }
 
 interface Props {
@@ -21,8 +25,17 @@ export function StartScreen({ onStarted, onOpenExisting }: Props) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [existing, setExisting] = useState<string>('')
+  const [sources, setSources] = useState<DocSource[]>([])
 
   const canRun = url.trim().length > 0 && !busy
+  const alreadyAdded = sources.some((s) => s.homepageUrl === url.trim())
+
+  function addSource() {
+    const trimmed = url.trim()
+    if (!existing || alreadyAdded) return
+    setSources((prev) => [...prev, { homepageUrl: trimmed, collection: existing }])
+    setUrl('')
+  }
 
   // Re-extracting a site that's already indexed costs a full agent run, so
   // check whether one exists and offer to open it instead. Debounced, and
@@ -125,21 +138,43 @@ export function StartScreen({ onStarted, onOpenExisting }: Props) {
         {existing ? (
           <div className="start__existing">
             <span className="start__existing-text">
-              <b>{existing}</b> is already indexed — no need to extract it again.
+              <b>{existing}</b> is already indexed — add it instead of re-extracting.
             </span>
-            <button
-              className="cmd cmd--ghost"
-              onClick={() =>
-                onOpenExisting({ homepageUrl: url.trim(), apiKey, collection: existing })
-              }
-            >
-              Query it →
+            <button className="cmd cmd--ghost" disabled={alreadyAdded} onClick={addSource}>
+              {alreadyAdded ? 'Added' : '+ Add source'}
             </button>
           </div>
         ) : (
           <p className="start__hint">
             Private and loopback addresses are rejected by the API before any fetch happens.
           </p>
+        )}
+
+        {sources.length > 0 && (
+          <div className="srcset">
+            <p className="mono-label srcset__label">
+              Querying across {sources.length} source{sources.length === 1 ? '' : 's'}
+            </p>
+            <div className="srcset__list">
+              {sources.map((s) => (
+                <span key={s.collection} className="srcchip">
+                  {s.collection}
+                  <button
+                    className="srcchip__x"
+                    aria-label={`Remove ${s.collection}`}
+                    onClick={() =>
+                      setSources((prev) => prev.filter((p) => p.collection !== s.collection))
+                    }
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <button className="cmd cmd--ghost" onClick={() => onOpenExisting({ apiKey, sources })}>
+              Query {sources.length > 1 ? 'these sources' : 'this source'} →
+            </button>
+          </div>
         )}
 
         <div className="stages">

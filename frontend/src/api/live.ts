@@ -70,11 +70,11 @@ export class LiveClient implements OmniDocClient {
     return res.json()
   }
 
-  async query(homepageUrl: string, question: string, apiKey: string): Promise<QueryResponse> {
+  async query(homepageUrls: string[], question: string, apiKey: string): Promise<QueryResponse> {
     const res = await fetch(`${HTTP_BASE}/query`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
-      body: JSON.stringify({ query: question, homepage_url: homepageUrl }),
+      body: JSON.stringify({ query: question, homepage_urls: homepageUrls }),
     })
     if (!res.ok) {
       return { status: 'failed', message: await describeHttpError(res) }

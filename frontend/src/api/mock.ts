@@ -129,10 +129,17 @@ export class MockClient implements OmniDocClient {
     }
   }
 
-  async query(_homepageUrl: string, question: string): Promise<QueryResponse> {
+  async query(homepageUrls: string[], question: string): Promise<QueryResponse> {
     await delay(1400)
     const hit = ANSWERS.find((a) => a.match.test(question)) ?? DEFAULT_ANSWER
-    return { status: 'success', answer: hit.answer, sources: hit.sources }
+    // Spread the mock chunks across the given sources so the multi-source
+    // citation grouping has something realistic to render.
+    const sources = hit.sources.map((s, i) => ({
+      ...s,
+      source: `tutorial / page-${i + 1}`,
+      collection: collectionNameFor(homepageUrls[i % homepageUrls.length] ?? ''),
+    }))
+    return { status: 'success', answer: hit.answer, sources }
   }
 }
 

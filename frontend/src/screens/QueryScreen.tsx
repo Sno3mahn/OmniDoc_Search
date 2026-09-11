@@ -13,9 +13,8 @@ interface Turn {
 }
 
 interface Props {
-  homepageUrl: string
+  sources: Array<{ homepageUrl: string; collection: string }>
   apiKey: string
-  collection: string
   /** False when opened directly against an existing index, so there's no run
    *  to go "back" to. */
   hasRun: boolean
@@ -66,7 +65,9 @@ function renderAnswer(text: string) {
   return out
 }
 
-export function QueryScreen({ homepageUrl, apiKey, collection, hasRun, onBack }: Props) {
+export function QueryScreen({ sources, apiKey, hasRun, onBack }: Props) {
+  const multi = sources.length > 1
+  const label = multi ? `${sources.length} sources` : sources[0]?.collection ?? ''
   const [turns, setTurns] = useState<Turn[]>([])
   const [draft, setDraft] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -84,7 +85,7 @@ export function QueryScreen({ homepageUrl, apiKey, collection, hasRun, onBack }:
     setDraft('')
 
     try {
-      const res = await getClient().query(homepageUrl, question, apiKey)
+      const res = await getClient().query(sources.map((s) => s.homepageUrl), question, apiKey)
       setTurns((t) =>
         t.map((turn) =>
           turn.id === id
@@ -106,9 +107,13 @@ export function QueryScreen({ homepageUrl, apiKey, collection, hasRun, onBack }:
     <main className="qry">
       <div className="qry__inner">
         <header className="qry__head">
-          <p className="mono-label">Index ready</p>
-          <p className="qry__collection">{collection}</p>
-          <p className="qry__meta">{homepageUrl}</p>
+          <p className="mono-label">{multi ? 'Querying across sources' : 'Index ready'}</p>
+          <p className="qry__collection">{label}</p>
+          <div className="qry__srcs">
+            {sources.map((s) => (
+              <span key={s.collection} className="qry__src">{s.collection}</span>
+            ))}
+          </div>
         </header>
 
         {turns.length === 0 && (
@@ -127,7 +132,7 @@ export function QueryScreen({ homepageUrl, apiKey, collection, hasRun, onBack }:
             {t.pending && (
               <div className="turn__pending">
                 <span className="dot" />
-                <span>retrieving from {collection}…</span>
+                <span>retrieving from {label}…</span>
               </div>
             )}
 
@@ -142,13 +147,22 @@ export function QueryScreen({ homepageUrl, apiKey, collection, hasRun, onBack }:
                 </p>
                 {t.sources.map((s, i) => (
                   <div key={i} className="src">
-                    <span className="src__idx">[{String(i + 1).padStart(2, '0')}]</span>
-                    <span className="src__score">
-                      <span className="src__bar">
-                        <span style={{ width: `${Math.round((s.score ?? 0) * 100)}%` }} />
+                    <div className="src__meta">
+                      <span className="src__idx">[{String(i + 1).padStart(2, '0')}]</span>
+                      <span className="src__score">
+                        <span className="src__bar">
+                          <span style={{ width: `${Math.round((s.score ?? 0) * 100)}%` }} />
+                        </span>
+                        <span className="src__num">{(s.score ?? 0).toFixed(2)}</span>
                       </span>
-                      <span className="src__num">{(s.score ?? 0).toFixed(2)}</span>
-                    </span>
+                      {/* Which doc set, and which page inside it. Without this
+                          a citation is unverifiable - you can read the chunk
+                          but not go find it. */}
+                      {multi && s.collection && (
+                        <span className="src__coll">{s.collection}</span>
+                      )}
+                      {s.source && <span className="src__page">{s.source}</span>}
+                    </div>
                     {/* Chunks arrive as raw markdown slices; collapse blank
                         runs so a heading + body doesn't read as two orphans. */}
                     <span className="src__text">{s.text.replace(/\n{2,}/g, '\n')}</span>

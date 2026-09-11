@@ -11,6 +11,8 @@ from llama_index.core.agent.workflow import ToolCall, ToolCallResult, AgentStrea
 
 _NOT_PROVIDED = object()
 
+AGENT_MAX_ITERATIONS = int(os.getenv("AGENT_MAX_ITERATIONS", "12"))
+
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
@@ -70,7 +72,12 @@ async def run_concurrent_workflows(list_of_contents: List[str],
 
 
 async def run_agent_verbose(agent: ReActAgent | FunctionAgent, query):
-    handler = agent.run(query, max_iterations=50)
+    # 50 ReAct iterations is effectively unbounded: each is an LLM call plus
+    # tool calls, so one loop that fails to converge can dominate a run's time
+    # and cost with nothing to stop it. The agent is now only a fallback for
+    # homepage nav that won't parse, and that job converges in a handful of
+    # steps or not at all.
+    handler = agent.run(query, max_iterations=AGENT_MAX_ITERATIONS)
     print(f"User:  {query}")
     async for event in handler.stream_events():
         if isinstance(event, ToolCallResult):
