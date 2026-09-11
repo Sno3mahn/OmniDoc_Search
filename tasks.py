@@ -54,7 +54,10 @@ def run_etl_task(self, job_id: str, homepage_url: str, collection_name: str,
         agents, browser = await build_agents(use_playwright=True)
         result_payload = {"status": "failed", "dir_name": None}
         try:
-            wf = ETLWorkflow(homepage_url=homepage_url, agents=agents, timeout=None)
+            # run_id scopes the output directory, so two concurrent runs of
+            # the same site can't overwrite each other's extraction.
+            wf = ETLWorkflow(homepage_url=homepage_url, agents=agents, timeout=None,
+                             run_id=job_id)
             handler = wf.run()
             async for ev in handler.stream_events():
                 if isinstance(ev, StatusEmitterEvent):
@@ -94,6 +97,7 @@ def run_etl_task(self, job_id: str, homepage_url: str, collection_name: str,
                 "job_id": job_id,
                 "homepage_url": homepage_url,
                 "discovery": result.get("discovery"),
+                "source_lastmod": result.get("source_lastmod"),
             },
             queue="ingest",
         )
@@ -117,6 +121,7 @@ def run_pipeline_task(
     job_id: str = None,
     homepage_url: str = None,
     discovery: str = None,
+    source_lastmod: str = None,
 ):
     query_engine = QueryEngine(db_path=db_path)
     fingerprint = corpus.fingerprint_dir(input_dir)
@@ -147,6 +152,7 @@ def run_pipeline_task(
             chunk_size=CHUNK_SIZE,
             job_id=job_id,
             discovery=discovery,
+            source_lastmod=source_lastmod,
         )
 
     if job_id:

@@ -10,6 +10,7 @@ interface Turn {
   sources?: QuerySource[]
   error?: string
   pending: boolean
+  cached?: boolean
 }
 
 interface Props {
@@ -90,7 +91,7 @@ export function QueryScreen({ sources, apiKey, hasRun, onBack }: Props) {
         t.map((turn) =>
           turn.id === id
             ? turn.pending && res.status === 'success'
-              ? { ...turn, pending: false, answer: res.answer, sources: res.sources }
+              ? { ...turn, pending: false, answer: res.answer, sources: res.sources, cached: res.cached }
               : { ...turn, pending: false, error: res.message ?? 'query failed' }
             : turn,
         ),
@@ -138,7 +139,15 @@ export function QueryScreen({ sources, apiKey, hasRun, onBack }: Props) {
 
             {t.error && <div className="turn__error">✕ {t.error}</div>}
 
-            {t.answer && <div className="turn__answer">{renderAnswer(t.answer)}</div>}
+            {t.answer && (
+              <div className="turn__answer">
+                {renderAnswer(t.answer)}
+                {/* A cached answer returns in milliseconds instead of seconds.
+                    Saying so is more honest than letting it look like the
+                    model got suspiciously fast. */}
+                {t.cached && <span className="turn__cached">cached</span>}
+              </div>
+            )}
 
             {t.sources && t.sources.length > 0 && (
               <div className="srcs">

@@ -38,6 +38,11 @@ from urllib.parse import urlparse, urlunparse
 PIPELINE_VERSION = 3
 
 DEFAULT_TTL_SECONDS = int(os.getenv("CORPUS_TTL_SECONDS", str(14 * 24 * 3600)))
+# How old a record must be before it's worth spending an HTTP request to ask
+# the site whether it has changed. Walking a sitemap index for <lastmod> took
+# 5.4s on docusaurus.io, and that cost would otherwise land on the cache-HIT
+# path - the one that exists to be fast. Docs don't change by the minute.
+RECHECK_AFTER_SECONDS = int(os.getenv("CORPUS_RECHECK_AFTER", "3600"))
 CORPUS_DB_PATH = os.getenv("CORPUS_DB_PATH", "./omnidoc_corpus.sqlite3")
 
 _SCHEMA = """
@@ -52,6 +57,7 @@ CREATE TABLE IF NOT EXISTS corpus (
     status          TEXT NOT NULL,
     discovery       TEXT,
     pipeline_version INTEGER NOT NULL,
+    source_lastmod  TEXT,
     embed_model     TEXT NOT NULL,
     chunk_size      INTEGER NOT NULL,
     detail          TEXT
@@ -74,6 +80,7 @@ class CorpusRecord:
     pipeline_version: int
     embed_model: str
     chunk_size: int
+    source_lastmod: Optional[str] = None
     detail: Optional[str] = None
 
     @property
@@ -121,7 +128,23 @@ def _connect(db_path: str = CORPUS_DB_PATH) -> sqlite3.Connection:
     # writes); WAL lets readers proceed during a write instead of blocking.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     return conn
+
+
+# Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS is a
+# no-op on an existing table, so a new column has to be ALTERed in or every
+# read of an old database fails on the missing field.
+_ADDED_COLUMNS = {
+    "source_lastmod": "TEXT",
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(corpus)")}
+    for column, decl in _ADDED_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE corpus ADD COLUMN {column} {decl}")
 
 
 def record(
@@ -135,6 +158,7 @@ def record(
     node_count: int = 0,
     job_id: Optional[str] = None,
     discovery: Optional[str] = None,
+    source_lastmod: Optional[str] = None,
     detail: Optional[Dict] = None,
     db_path: str = CORPUS_DB_PATH,
 ) -> CorpusRecord:
@@ -154,6 +178,7 @@ def record(
         pipeline_version=PIPELINE_VERSION,
         embed_model=embed_model,
         chunk_size=chunk_size,
+        source_lastmod=source_lastmod,
         detail=json.dumps(detail) if detail else None,
     )
     fields = asdict(row)
@@ -193,6 +218,7 @@ def staleness(
     embed_model: str,
     chunk_size: int,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    observed_lastmod: Optional[str] = None,
 ) -> Optional[str]:
     """Returns None if the index can be reused, else the reason it can't.
 
@@ -211,6 +237,12 @@ def staleness(
         return f"embedding drift: indexed with {rec.embed_model}, now {embed_model}"
     if rec.chunk_size != chunk_size:
         return f"embedding drift: chunk_size {rec.chunk_size} -> {chunk_size}"
+    # Source drift, stated by the site rather than guessed from a clock. ISO
+    # dates compare lexicographically. Only a *newer* value counts: a site that
+    # stamps every build, or one that dropped lastmod entirely, must not make a
+    # good index look stale.
+    if observed_lastmod and rec.source_lastmod and observed_lastmod > rec.source_lastmod:
+        return f"source drift: site reports lastmod {observed_lastmod} > indexed {rec.source_lastmod}"
     if rec.age_seconds > ttl_seconds:
         return f"possible source drift: indexed {rec.age_seconds / 86400:.1f} days ago"
     return None

@@ -132,6 +132,52 @@ def _base_path(homepage_url: str) -> str:
     return path
 
 
+def sitemap_lastmod(homepage_url: str, max_urls: int = _MAX_URLS) -> Optional[str]:
+    """The newest <lastmod> across the docs subtree, as the site reports it.
+
+    This is the cheap half of source-drift detection. A corpus fingerprint can
+    only tell you the docs changed by re-fetching every page; a sitemap states
+    when the site last changed for the price of one request. It's advisory -
+    plenty of generators stamp every page with the build date, and some omit
+    lastmod entirely - so a newer lastmod is a reason to re-check, never proof
+    of drift, and a missing one proves nothing either way (hence None rather
+    than a falsy date).
+    """
+    base = _base_path(homepage_url)
+    newest = None
+    seen_sitemaps = set()
+    queue = discover_sitemaps(homepage_url)
+
+    while queue and len(seen_sitemaps) < _MAX_SITEMAPS:
+        url = queue.pop(0)
+        if url in seen_sitemaps:
+            continue
+        seen_sitemaps.add(url)
+        response = _get(url)
+        if response is None:
+            continue
+        soup = BeautifulSoup(_body(response), "xml")
+        queue.extend(
+            loc.get_text(strip=True)
+            for loc in soup.select("sitemapindex > sitemap > loc")
+            if not _SKIP_PATH_RE.search(urlparse(loc.get_text(strip=True)).path)
+        )
+        for entry in soup.find_all("url"):
+            loc = entry.find("loc")
+            mod = entry.find("lastmod")
+            if loc is None or mod is None:
+                continue
+            absolute, _ = urldefrag(loc.get_text(strip=True))
+            if not _is_doc_url(absolute, homepage_url, base):
+                continue
+            value = mod.get_text(strip=True)
+            # ISO-8601 dates sort lexicographically, so no parsing is needed to
+            # find the newest - and no timezone library is needed to be wrong.
+            if value and (newest is None or value > newest):
+                newest = value
+    return newest
+
+
 def sitemap_urls(
     homepage_url: str,
     max_urls: int = _MAX_URLS,

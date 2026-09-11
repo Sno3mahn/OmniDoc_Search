@@ -294,3 +294,16 @@
     padding-top: 4px;
   }
 }
+
+/* Marks an answer served from the query cache rather than re-synthesised. */
+.turn__cached {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 2px 7px;
+  border: 1px solid var(--line-bright);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-lo);
+}

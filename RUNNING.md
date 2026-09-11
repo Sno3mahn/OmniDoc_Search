@@ -44,9 +44,26 @@ concurrency and different scaling. `tasks.py` routes by task name.
 | `RAG_CHUNK_SIZE` | 256 | chunk size in tokens; see below |
 | `RAG_CHUNK_OVERLAP` | 64 | overlap between chunks |
 | `CORPUS_TTL_SECONDS` | 1209600 | age at which an index is assumed drifted (14d) |
+| `CORPUS_RECHECK_AFTER` | 3600 | min record age before spending an HTTP request on a `<lastmod>` check |
 | `CORPUS_DB_PATH` | ./omnidoc_corpus.sqlite3 | corpus registry |
+| `QUERY_CACHE` | 1 | set to `0` to disable answer caching |
+| `QUERY_CACHE_TTL` | 86400 | answer cache TTL, seconds |
+| `OMNIDOC_RUNS_ROOT` | runs | per-run extraction output |
+| `OMNIDOC_RUN_TTL_SECONDS` | 604800 | age at which a run directory is pruned (7d) |
 | `AGENT_MAX_ITERATIONS` | 12 | cap on the fallback agent's ReAct loop |
 | `ETL_SOFT_TIME_LIMIT` | 900 | seconds before an extraction task is killed |
+
+## Answer caching
+
+`/query` caches answers in Redis, keyed on the normalized question plus each
+collection's corpus fingerprint and the retrieval settings. Responses carry
+`"cached": true|false`. Re-indexing a site changes its fingerprint, which makes
+its cached answers unreachable without an explicit purge.
+
+Only exact (normalized) question matching. Semantic near-match caching was
+measured on the typer eval set and rejected: at similarity >= 0.88 every pair
+that crossed the threshold had a *different* gold page, and at >= 0.92 nothing
+crossed at all. See the docstring in `query_cache.py` for the table.
 
 ## Re-indexing
 

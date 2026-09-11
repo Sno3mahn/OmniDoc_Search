@@ -4,26 +4,75 @@ from agentic_etl import (
 from import_stuff import (
     extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json,
     resolve_markdown_sources, looks_like_markdown, strip_common_boilerplate,
-    get_html_body, extract_toc, file_name_for, sitemap_urls, fetch_first,
+    get_html_body, extract_toc, file_name_for, sitemap_urls, sitemap_lastmod, fetch_first,
 )
 
 import os
 import re
 import json
+import time
+import shutil
 import argparse
 import concurrent
 import asyncio
+from uuid import uuid4
 from typing import Dict, Any
 
 from llama_index.core.workflow import StartEvent, StopEvent, Context, Workflow, step
 
+# Every run gets its own directory under here.
+RUNS_ROOT = os.getenv("OMNIDOC_RUNS_ROOT", "runs")
+# Extracted markdown is an intermediate: once it's embedded into Chroma, the
+# only reason to keep it is debugging and re-embedding without re-fetching.
+RUN_DIR_TTL_SECONDS = int(os.getenv("OMNIDOC_RUN_TTL_SECONDS", str(7 * 24 * 3600)))
+
+
+def _site_slug(homepage_url: str) -> str:
+    match = re.search(r'(?:https?://)?(?:[\w-]+\.)*([\w-]+)\.[a-z]{2,}', homepage_url)
+    return match.group(1) if match else 'site'
+
+
+def run_dir(homepage_url: str, run_id: str) -> str:
+    """Output directory for one run, scoped by run_id.
+
+    This used to be f'{domain}_dir', shared by every run of that site, and the
+    workflow wiped it on start to clear stale files. Two concurrent runs of the
+    same site therefore deleted each other's output mid-extraction - the second
+    run's wipe landed while the first was still writing, and both ended up
+    indexing a partial corpus. Scoping by run makes the collision impossible
+    rather than merely unlikely, and removes the need to wipe anything.
+    """
+    return os.path.join(RUNS_ROOT, f"{_site_slug(homepage_url)}-{run_id}")
+
+
+def prune_run_dirs(ttl_seconds: int = RUN_DIR_TTL_SECONDS) -> int:
+    """Run directories are now unique per run, so without this they accumulate
+    one corpus per run forever. Called at the start of a run: cheap, and it
+    keeps cleanup in the same process that creates the garbage."""
+    if not os.path.isdir(RUNS_ROOT):
+        return 0
+    cutoff = time.time() - ttl_seconds
+    removed = 0
+    for name in os.listdir(RUNS_ROOT):
+        path = os.path.join(RUNS_ROOT, name)
+        try:
+            if os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 class ETLWorkflow(Workflow):
-    def __init__(self, homepage_url: str, agents: Dict[str, Any] = None, timeout=45, **kwargs):
-        super().__init__(timeout=timeout, num_concurrent_runs=4)        
-        self.agents=agents
+    def __init__(self, homepage_url: str, agents: Dict[str, Any] = None, timeout=45,
+                 run_id: str = None, **kwargs):
+        super().__init__(timeout=timeout, num_concurrent_runs=4)
+        self.agents = agents
         self.homepage_url = homepage_url
+        # Defaults so the CLI and any direct caller still get an isolated
+        # directory without having to invent an id.
+        self.run_id = run_id or uuid4().hex[:12]
 
     @step
     async def read_homepage_content(self, ctx: Context, ev: StartEvent) -> MDifyEvent:
@@ -55,20 +104,10 @@ class ETLWorkflow(Workflow):
                 }
             '''
             ctx.write_event_to_stream(StatusEmitterEvent(status="Reading content from homepage"))
-            match = re.search(r'(?:https?://)?(?:[\w-]+\.)*([\w-]+)\.[a-z]{2,}', self.homepage_url)
-            dir_name = f'{match.group(1)}_dir' if match else 'save_dir'
+            dir_name = run_dir(self.homepage_url, self.run_id)
             await ctx.store.set('dir_name', dir_name)
-
-            # Clear stale output from a previous run of this same site. Without
-            # this, files from an earlier extraction (different TOC, different
-            # filenames) survive and get ingested alongside the new ones, and
-            # the completion count compares against a directory that holds more
-            # files than this run produced.
-            if os.path.isdir(dir_name):
-                for stale in os.listdir(dir_name):
-                    path = os.path.join(dir_name, stale)
-                    if os.path.isfile(path):
-                        os.remove(path)
+            os.makedirs(dir_name, exist_ok=True)
+            prune_run_dirs()
 
             # Three discovery paths, cheapest and most authoritative first.
             #
@@ -89,9 +128,16 @@ class ETLWorkflow(Workflow):
 
             sitemap_pages, sitemap_names = [], {}
             nav_pages, nav_names = [], {}
+            lastmod = None
             try:
                 sitemap_pages, sitemap_names = await loop.run_in_executor(
                     None, sitemap_urls, self.homepage_url
+                )
+                # Recorded now so a later request can ask "has the site changed
+                # since we indexed it?" for one HTTP request instead of a
+                # full re-extraction.
+                lastmod = await loop.run_in_executor(
+                    None, sitemap_lastmod, self.homepage_url
                 )
             except Exception as exc:
                 ctx.write_event_to_stream(StatusEmitterEvent(status=f"Sitemap lookup failed ({exc})"))
@@ -127,6 +173,7 @@ class ETLWorkflow(Workflow):
             await ctx.store.set("list_of_contents", list_of_contents)
             await ctx.store.set("file_name_map", file_name_map)
             await ctx.store.set("discovery", discovery)
+            await ctx.store.set("source_lastmod", lastmod)
 
             ctx.write_event_to_stream(StatusEmitterEvent(status="Analyzed homepage content"))
             # Always the md path now: resolve_markdown_sources decides
@@ -283,6 +330,7 @@ class ETLWorkflow(Workflow):
         present = set(os.listdir(dir_name))
         missing = len(expected - present)
         discovery = await ctx.store.get('discovery', 'unknown')
+        source_lastmod = await ctx.store.get('source_lastmod', None)
 
         # json.dumps rather than string concatenation - dir_name and discovery
         # both derive from user input, and a quote in either produced malformed
@@ -292,6 +340,7 @@ class ETLWorkflow(Workflow):
             "status": status,
             "dir_name": dir_name,
             "discovery": discovery,
+            "source_lastmod": source_lastmod,
             "pages_expected": len(expected),
             "pages_saved": len(expected & present),
         }))

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import os
@@ -10,9 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import corpus
 import job_bus
-from rag_qe import CHUNK_SIZE, EMBED_MODEL, QueryEngine, collection_name_for_url
+import query_cache
+from rag_qe import CHUNK_SIZE, EMBED_MODEL, SIMILARITY_TOP_K, QueryEngine, collection_name_for_url
 from tasks import run_etl_task
-from import_stuff import is_safe_url
+from import_stuff import is_safe_url, sitemap_lastmod
 from rate_limit import enforce_rate_limit
 
 load_dotenv()
@@ -101,7 +103,22 @@ async def run_etl_workflow(request: Request, api_key: str = Depends(require_api_
     # an index can't be reused, or None - so the cache hit is the default and
     # every re-run has to justify itself.
     existing = corpus.get(homepage_url)
-    reason = corpus.staleness(existing, embed_model=EMBED_MODEL, chunk_size=CHUNK_SIZE)
+    # One HTTP request to ask the site when it last changed, instead of
+    # re-extracting every page to find out. Only worth paying when there's a
+    # record that could be reused, and only when it carries a baseline to
+    # compare against. Advisory: a newer lastmod triggers a re-index, a missing
+    # or older one leaves the TTL as the fallback.
+    observed = None
+    if (existing is not None and existing.source_lastmod and not force
+            and existing.age_seconds > corpus.RECHECK_AFTER_SECONDS):
+        try:
+            observed = await asyncio.to_thread(sitemap_lastmod, homepage_url)
+        except Exception:
+            observed = None
+    reason = corpus.staleness(
+        existing, embed_model=EMBED_MODEL, chunk_size=CHUNK_SIZE,
+        observed_lastmod=observed,
+    )
     if existing is not None and reason is None and not force:
         return {
             "status": "cached",
@@ -195,6 +212,14 @@ async def query_docs(request: Request, api_key: str = Depends(require_api_key)):
             "message": f"no ingested documents yet for: {', '.join(missing)} - run /etl_workflow/ for each first",
         }
 
+    # Retrieval is ~9ms; the ~3.7s is LLM synthesis, so the answer is the only
+    # thing worth caching. Exact normalized question only - see query_cache's
+    # module docstring for the measurement that ruled out semantic matching.
+    key = query_cache.cache_key(question, collections, urls, SIMILARITY_TOP_K)
+    cached = await query_cache.get(key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
     try:
         if len(collections) == 1:
             engine = query_engine.get_query_engine(collections[0])
@@ -204,7 +229,7 @@ async def query_docs(request: Request, api_key: str = Depends(require_api_key)):
     except Exception as ex:
         return {"status": "failed", "message": str(ex)}
 
-    return {
+    payload = {
         "status": "success",
         "answer": str(response),
         "collections": collections,
@@ -218,6 +243,8 @@ async def query_docs(request: Request, api_key: str = Depends(require_api_key)):
             for node in getattr(response, "source_nodes", [])
         ],
     }
+    await query_cache.put(key, payload)
+    return {**payload, "cached": False}
 
 
 @app.websocket("/ws/stream/{job_id}")

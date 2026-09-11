@@ -1,0 +1,80 @@
+{"question": "How do Docusaurus plugins and themes communicate with each other if they can't import each other?", "gold": "docs-advanced-architecture.md"}
+{"question": "Why do functions or regexes in my Docusaurus config stop working on the client side?", "gold": "docs-advanced-architecture.md"}
+{"question": "How does Docusaurus decide which component to use when multiple themes define the same one?", "gold": "docs-advanced-client.md"}
+{"question": "What's the difference between @theme-original and @theme-init, and when should I use each?", "gold": "docs-advanced-client.md"}
+{"question": "How do I add a custom plugin to my Docusaurus config?", "gold": "docs-advanced-plugins.md"}
+{"question": "What's the difference between a plugin and a theme in Docusaurus?", "gold": "docs-advanced-plugins.md"}
+{"question": "How do I change the base URL path for docs, blog, or pages in Docusaurus?", "gold": "docs-advanced-routing.md"}
+{"question": "Why does a Markdown link without a file extension get treated as a URL instead of a file path?", "gold": "docs-advanced-routing.md"}
+{"question": "Why do I get 'window is not defined' when I build my site?", "gold": "docs-advanced-ssg.md"}
+{"question": "Can I use process.env.NODE_ENV in a component if it's also server-side rendered?", "gold": "docs-advanced-ssg.md"}
+{"question": "What background should I have before reading the more advanced documentation?", "gold": "docs-advanced.md"}
+{"question": "Who are these sections intended for?", "gold": "docs-advanced.md"}
+{"question": "What's the difference between url and baseUrl in the site configuration?", "gold": "docs-api-docusaurus-config.md"}
+{"question": "How do I provide a distinct URL for each locale?", "gold": "docs-api-docusaurus-config.md"}
+{"question": "How do I create a new Docusaurus site using a specific template?", "gold": "docs-api-misc-create-docusaurus.md"}
+{"question": "How can I skip dependency installation when scaffolding a new app?", "gold": "docs-api-misc-create-docusaurus.md"}
+{"question": "Why should I use the Docusaurus Link component instead of a regular <a> tag?", "gold": "docs-api-misc-docusaurus-eslint-plugin-no-html-links.md"}
+{"question": "How do I configure the ESLint rule to ignore absolute URLs when using <a> tags?", "gold": "docs-api-misc-docusaurus-eslint-plugin-no-html-links.md"}
+{"question": "How do I fix ESLint errors telling me to wrap JSX text labels in a translate call?", "gold": "docs-api-misc-docusaurus-eslint-plugin-no-untranslated-text.md"}
+{"question": "How can I ignore certain strings so they don't get reported as untranslated text?", "gold": "docs-api-misc-docusaurus-eslint-plugin-no-untranslated-text.md"}
+{"question": "How do I fix an ESLint error that says to use @theme/Heading instead of h1/h2/h3 tags in Docusaurus?", "gold": "docs-api-misc-docusaurus-eslint-plugin-prefer-docusaurus-heading.md"}
+{"question": "What is the correct syntax for using the theme Heading component for headings in Docusaurus?", "gold": "docs-api-misc-docusaurus-eslint-plugin-prefer-docusaurus-heading.md"}
+{"question": "Why does Docusaurus fail to extract translations when I pass a variable to <Translate> or translate()?", "gold": "docs-api-misc-docusaurus-eslint-plugin-string-literal-i18n-messages.md"}
+{"question": "How do I use dynamic values like a first name in a translate call without breaking static extraction?", "gold": "docs-api-misc-docusaurus-eslint-plugin-string-literal-i18n-messages.md"}
+{"question": "How do I set up the Docusaurus ESLint plugin in a flat config file?", "gold": "docs-api-misc-docusaurus-eslint-plugin.md"}
+{"question": "How can I enable only specific rules from the Docusaurus ESLint plugin?", "gold": "docs-api-misc-docusaurus-eslint-plugin.md"}
+{"question": "How do I format values like file paths, URLs, and code snippets in a console message?", "gold": "docs-api-misc-docusaurus-logger.md"}
+{"question": "When should I use info instead of warn or error for large blocks of help text?", "gold": "docs-api-misc-docusaurus-logger.md"}
+{"question": "How do I make Docusaurus watch my plugin's server-side files and reload the plugin when they change?", "gold": "docs-api-plugin-methods-extend-infrastructure.md"}
+{"question": "How do I add a custom command to the Docusaurus CLI from a plugin?", "gold": "docs-api-plugin-methods-extend-infrastructure.md"}
+{"question": "How do I declare JSON translation files for my plugin so they can be written and loaded for the current locale?", "gold": "docs-api-plugin-methods-i18n-lifecycles.md"}
+{"question": "How can a theme provide default translations for the <Translate> API?", "gold": "docs-api-plugin-methods-i18n-lifecycles.md"}
+{"question": "How do I fetch data in a Docusaurus plugin and then pass it to a route?", "gold": "docs-api-plugin-methods-lifecycle-apis.md"}
+{"question": "How can I share data from a Docusaurus plugin with every page on my site?", "gold": "docs-api-plugin-methods-lifecycle-apis.md"}
+{"question": "How do I validate and normalize plugin options before the plugin is initialized?", "gold": "docs-api-plugin-methods-static-methods.md"}
+{"question": "How do I validate and normalize the theme config provided in docusaurus.config.js?", "gold": "docs-api-plugin-methods-static-methods.md"}
+{"question": "What's the difference between context and options when writing a Docusaurus plugin?", "gold": "docs-api-plugin-methods.md"}
+{"question": "How do I validate a Docusaurus plugin's options?", "gold": "docs-api-plugin-methods.md"}
+{"question": "How do I set up client-side redirects in Docusaurus for old URLs to new pages?", "gold": "docs-api-plugins-docusaurus-plugin-client-redirects.md"}
+{"question": "Why don't my client-side redirects work when I run the site locally in development?", "gold": "docs-api-plugins-docusaurus-plugin-client-redirects.md"}
+{"question": "Why is my blog RSS or Atom feed not being generated when I run the site locally?", "gold": "docs-api-plugins-docusaurus-plugin-content-blog.md"}
+{"question": "How do I disable the archive section for my blog?", "gold": "docs-api-plugins-docusaurus-plugin-content-blog.md"}
+{"question": "How do I change the URL route for the docs section in Docusaurus?", "gold": "docs-api-plugins-docusaurus-plugin-content-docs.md"}
+{"question": "Why is the last update time missing or incorrect for my docs during CI builds?", "gold": "docs-api-plugins-docusaurus-plugin-content-docs.md"}
+{"question": "How do I change where Docusaurus looks for my pages?", "gold": "docs-api-plugins-docusaurus-plugin-content-pages.md"}
+{"question": "How do I make a Markdown page accessible only by direct link and excluded from search engines?", "gold": "docs-api-plugins-docusaurus-plugin-content-pages.md"}
+{"question": "How do I make Docusaurus wrap my CSS modules in CSS cascade layers?", "gold": "docs-api-plugins-docusaurus-plugin-css-cascade-layers.md"}
+{"question": "What happens if multiple cascade layers match the same CSS file path?", "gold": "docs-api-plugins-docusaurus-plugin-css-cascade-layers.md"}
+{"question": "Where can I view debug information while running Docusaurus locally?", "gold": "docs-api-plugins-docusaurus-plugin-debug.md"}
+{"question": "How do I enable the debug information page in production?", "gold": "docs-api-plugins-docusaurus-plugin-debug.md"}
+{"question": "Why does my analytics only show up in production builds and not during local development?", "gold": "docs-api-plugins-docusaurus-plugin-google-analytics.md"}
+{"question": "What do I need to do if I'm still using a UA tracking ID with Universal Analytics?", "gold": "docs-api-plugins-docusaurus-plugin-google-analytics.md"}
+{"question": "How do I set up Google Analytics tracking in Docusaurus?", "gold": "docs-api-plugins-docusaurus-plugin-google-gtag.md"}
+{"question": "Why isn't my Google Analytics tracking working during local development?", "gold": "docs-api-plugins-docusaurus-plugin-google-gtag.md"}
+{"question": "How do I add Google Tag Manager to my Docusaurus site?", "gold": "docs-api-plugins-docusaurus-plugin-google-tag-manager.md"}
+{"question": "Why isn't my Google Tag Manager plugin working in development?", "gold": "docs-api-plugins-docusaurus-plugin-google-tag-manager.md"}
+{"question": "How do I enable responsive image behavior while running the dev server?", "gold": "docs-api-plugins-docusaurus-plugin-ideal-image.md"}
+{"question": "Why does importing an image now give me an object instead of a URL string?", "gold": "docs-api-plugins-docusaurus-plugin-ideal-image.md"}
+{"question": "How do I add PWA support to a Docusaurus site?", "gold": "docs-api-plugins-docusaurus-plugin-pwa.md"}
+{"question": "Why does my Docusaurus site keep serving old content after a new deployment?", "gold": "docs-api-plugins-docusaurus-plugin-pwa.md"}
+{"question": "How can I figure out which plugin or loader is slowing down my Docusaurus bundler?", "gold": "docs-api-plugins-docusaurus-plugin-rsdoctor.md"}
+{"question": "Does the Docusaurus bundler troubleshooting plugin work with both Webpack and Rspack?", "gold": "docs-api-plugins-docusaurus-plugin-rsdoctor.md"}
+{"question": "Why isn't my sitemap generated when I run the site locally?", "gold": "docs-api-plugins-docusaurus-plugin-sitemap.md"}
+{"question": "How do I prevent specific pages from appearing in the sitemap?", "gold": "docs-api-plugins-docusaurus-plugin-sitemap.md"}
+{"question": "How do I automatically transform SVG files into React components at build time in Docusaurus?", "gold": "docs-api-plugins-docusaurus-plugin-svgr.md"}
+{"question": "Do I need to install the SVGR plugin separately if I'm already using @docusaurus/preset-classic?", "gold": "docs-api-plugins-docusaurus-plugin-svgr.md"}
+{"question": "Why aren't my Vercel Analytics stats showing up when I run the dev server?", "gold": "docs-api-plugins-docusaurus-plugin-vercel-analytics.md"}
+{"question": "How do I enable browser console logging for Vercel Analytics events in Docusaurus?", "gold": "docs-api-plugins-docusaurus-plugin-vercel-analytics.md"}
+{"question": "What types of official plugins are available?", "gold": "docs-api-plugins.md"}
+{"question": "Which official plugins can add behavior like sitemaps or PWA support to a site?", "gold": "docs-api-plugins.md"}
+{"question": "How do I make the site default to dark mode and hide the color mode toggle in the navbar?", "gold": "docs-api-themes-configuration.md"}
+{"question": "How do I add a dismissible announcement banner with custom background and text colors?", "gold": "docs-api-themes-configuration.md"}
+{"question": "Do I need to install the classic theme separately if I already use the classic preset?", "gold": "docs-api-themes-docusaurus-theme-classic.md"}
+{"question": "How do I add global custom CSS to a Docusaurus site using the classic theme?", "gold": "docs-api-themes-docusaurus-theme-classic.md"}
+{"question": "How do I add interactive code blocks to a Docusaurus site?", "gold": "docs-api-themes-docusaurus-theme-live-codeblock.md"}
+{"question": "How do I change whether the live code playground appears above or below the editor?", "gold": "docs-api-themes-docusaurus-theme-live-codeblock.md"}
+{"question": "How do I configure Docusaurus to render Mermaid code blocks in Markdown?", "gold": "docs-api-themes-docusaurus-theme-mermaid.md"}
+{"question": "Why aren't my Mermaid diagrams rendering after I add the Mermaid theme?", "gold": "docs-api-themes-docusaurus-theme-mermaid.md"}
+{"question": "How do I change the default search page path or disable the search page completely?", "gold": "docs-api-themes-docusaurus-theme-search-algolia.md"}
+{"question": "Do I need to install the Algolia search theme separately if I already have the classic preset?", "gold": "docs-api-themes-docusaurus-theme-search-algolia.md"}

@@ -53,6 +53,19 @@ EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 # The curve has a peak, not a direction: too large truncates, too small strips
 # a chunk of the context that makes it matchable. 64 tokens of overlap keeps an
 # answer that straddles a boundary reachable from either side.
+#
+# Validated on a second, independent corpus (docusaurus, 80 questions, 84
+# pages) so this isn't tuned to one site - there 256 wins on every metric:
+#
+#   chunk   nodes   r@1     r@3     r@5     r@10    MRR
+#   none     807    53.8    75.0    88.8    92.5    .671
+#   512      915    61.2    76.2    88.8    95.0    .719
+#   256     1310    62.5    80.0    91.2    95.0    .735
+#
+# Note r@5/r@10 also improve here, where on typer they dipped slightly - that
+# dip was the small eval set (52 questions) plus the fact that recall is scored
+# per PAGE, so more chunks per page crowds a fixed top-k with fewer distinct
+# pages. MRR and r@1 move the same direction on both corpora.
 CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "256"))
 CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "64"))
 

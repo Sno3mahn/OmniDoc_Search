@@ -226,3 +226,6 @@ save_dir/
 # Corpus registry - local state, like omnidoc_search.db above
 omnidoc_corpus.sqlite3
 omnidoc_corpus.sqlite3-*
+
+# Per-run extraction output (job-scoped; pruned after OMNIDOC_RUN_TTL_SECONDS)
+runs/

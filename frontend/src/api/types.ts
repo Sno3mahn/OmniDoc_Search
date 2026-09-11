@@ -36,6 +36,9 @@ export interface QueryResponse {
   answer?: string
   sources?: QuerySource[]
   message?: string
+  /** Served from the answer cache rather than re-synthesised. Worth showing:
+   *  it explains a sub-second response that otherwise looks suspicious. */
+  cached?: boolean
 }
 
 export interface JobStream {
