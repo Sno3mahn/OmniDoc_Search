@@ -2,9 +2,16 @@
 // FastAPI handlers, not with what the UI wishes it got.
 
 export interface StartJobResponse {
-  status: 'success' | 'failed'
+  /** 'cached' means the corpus registry already holds a current index for this
+   *  URL, so no job was queued and there is no job_id to stream. */
+  status: 'success' | 'failed' | 'cached'
   job_id?: string
   collection_name?: string
+  /** Why a re-index was necessary, when one was. null on a fresh site. */
+  reindex_reason?: string | null
+  page_count?: number
+  node_count?: number
+  indexed_at?: number
   message: string
 }
 

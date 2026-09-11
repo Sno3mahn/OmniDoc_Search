@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getClient } from '../api/client'
+import type { NavRun } from '../components/Navbar'
 import {
   applyEvent,
   emptyRun,
@@ -16,11 +17,22 @@ interface Props {
   homepageUrl: string
   apiKey: string
   collection: string
+  /** Reports the run's phase up to the navbar, which stays visible after you
+   *  navigate away from this screen. */
+  onRunChange(run: NavRun): void
   onReset(): void
   onQuery(): void
 }
 
-export function PipelineScreen({ jobId, homepageUrl, apiKey, collection, onReset, onQuery }: Props) {
+export function PipelineScreen({
+  jobId,
+  homepageUrl,
+  apiKey,
+  collection,
+  onRunChange,
+  onReset,
+  onQuery,
+}: Props) {
   const [run, setRun] = useState<RunState>(emptyRun)
   const [elapsed, setElapsed] = useState(0)
   const startRef = useRef(Date.now())
@@ -33,6 +45,10 @@ export function PipelineScreen({ jobId, homepageUrl, apiKey, collection, onReset
     })
     return () => stream.close()
   }, [jobId, apiKey])
+
+  useEffect(() => {
+    onRunChange(navRun(run))
+  }, [run, onRunChange])
 
   useEffect(() => {
     if (run.finished) return
@@ -155,6 +171,16 @@ function Result({
       )}
     </div>
   )
+}
+
+/** Collapses RunState down to what the navbar shows. 'partial success' counts
+ *  as done: an index exists and is queryable, which is the only thing the
+ *  navbar gates on. */
+function navRun(run: RunState): NavRun {
+  if (run.failure || run.stages.ready.status === 'failed') return { phase: 'failed' }
+  if (run.finished) return { phase: 'done' }
+  const active = [...STAGE_ORDER].reverse().find((id) => run.stages[id].status === 'running')
+  return active ? { phase: 'running', stage: active } : { phase: 'running' }
 }
 
 function lastTimestamp(run: RunState): number {

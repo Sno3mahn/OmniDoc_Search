@@ -1,28 +1,26 @@
-import asyncio
 import hashlib
 import hmac
-import json
 import os
 from uuid import uuid4
-from typing import Dict, Any, Optional
+from typing import Optional
 
-from celery.result import AsyncResult
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from run_workflow import ETLWorkflow
-from agentic_etl import build_agents, StatusEmitterEvent
-from llama_index.core.workflow import StopEvent
-from rag_qe import QueryEngine, collection_name_for_url
-from tasks import celery_app, run_pipeline_task
+import corpus
+import job_bus
+from rag_qe import CHUNK_SIZE, EMBED_MODEL, QueryEngine, collection_name_for_url
+from tasks import run_etl_task
 from import_stuff import is_safe_url
 from rate_limit import enforce_rate_limit
 
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 
-active_wfs: Dict[str, Any] = {}
+# No module-level job registry any more. Job state lives in Redis (job_bus), so
+# this process holds nothing a second replica wouldn't also see, and the ETL
+# itself runs in a Celery worker rather than in this event loop.
 RAG_DB_PATH = "./omnidoc_search.db"
 app = FastAPI()
 
@@ -79,73 +77,9 @@ def _check_ws_api_key(ws: WebSocket) -> Optional[str]:
     return _key_fingerprint(provided)
 
 
-async def _sync_query_engine_state(task_id: str, collection_name: str):
-    result = AsyncResult(task_id, app=celery_app)
-    while not result.ready():
-        await asyncio.sleep(1)
-
-    query_engine = QueryEngine(db_path=RAG_DB_PATH)
-    if result.successful():
-        query_engine.mark_pipeline_complete(collection_name, auto_initialize=True)
-
 @app.get('/health_check')
 async def health_check():
     return {"message": "OK"}
-
-
-def _emit(job_data: Dict[str, Any], msg: Optional[Dict[str, Any]]):
-    """Appends to the job's event log and fans the message out to every attached
-    WebSocket. A single shared queue was wrong: two connections to the same job
-    (a page refresh, a second tab, or React StrictMode's double-mount in dev)
-    both consume from it, so a disconnected-but-still-blocked handler can swallow
-    events the live one needed. Each connection now gets its own queue, and the
-    log lets a late joiner replay everything it missed."""
-    if msg is not None:
-        job_data['events'].append(msg)
-    for q in list(job_data['subscribers']):
-        q.put_nowait(msg)
-
-
-async def _drive_workflow(job_id: str, handler, playwright_browser, collection_name: str):
-    """Runs independently of any WebSocket connection, so a client disconnecting
-    mid-run can't cause the workflow to be abandoned or the Celery hand-off to be
-    skipped. Owns the playwright browser's lifetime - it's only closed here, once
-    the workflow has actually finished using it."""
-    job_data = active_wfs[job_id]
-    try:
-        async for ev in handler.stream_events():
-            if isinstance(ev, StatusEmitterEvent):
-                _emit(job_data, {"type": "status", "data": ev.status})
-            elif isinstance(ev, StopEvent):
-                res = json.loads(ev.result)
-                status = res.get("status", "")
-                dir_name = res.get("dir_name") if "failed" not in status else None
-
-                if dir_name:
-                    pipeline_task = run_pipeline_task.delay(
-                        collection_name=collection_name,
-                        db_path=RAG_DB_PATH,
-                        input_dir=dir_name,
-                    )
-                    asyncio.create_task(
-                        _sync_query_engine_state(pipeline_task.id, collection_name)
-                    )
-                    _emit(
-                        job_data,
-                        {"type": "pipeline_started", "data": {"task_id": pipeline_task.id}},
-                    )
-
-                job_data['final'] = {"type": "done", "data": status}
-                _emit(job_data, job_data['final'])
-        await handler
-    except Exception as exc:
-        job_data['final'] = {"type": "error", "data": str(exc)}
-        _emit(job_data, job_data['final'])
-    finally:
-        if playwright_browser is not None:
-            await playwright_browser.close()
-        job_data['finished'] = True
-        _emit(job_data, None)  # sentinel: tells attached WSs to stop reading
 
 
 @app.post('/etl_workflow/')
@@ -154,42 +88,76 @@ async def run_etl_workflow(request: Request, api_key: str = Depends(require_api_
 
     req = await request.json()
     homepage_url = req.get('homepage_url', '')
+    force = bool(req.get('force'))
     if not homepage_url:
         return {"status": "failed", "message": "homepage_url not provided"}
     if not is_safe_url(homepage_url):
         return {"status": "failed", "message": "homepage_url is not a permitted public address"}
 
-    job_id = str(uuid4())
     collection_name = collection_name_for_url(homepage_url)
-    agents, playwright_browser = await build_agents(use_playwright=True)
-    try:
-        wf = ETLWorkflow(
-            homepage_url=homepage_url,
-            agents=agents,
-            timeout=None,
-        )
-        handler = wf.run()
-    except Exception as ex:
-        if playwright_browser is not None:
-            await playwright_browser.close()
-        return {"status": "failed", "message": str(ex)}
 
-    active_wfs[job_id] = {
-        'handler': handler,
-        'events': [],
-        'subscribers': set(),
-        'finished': False,
-        'final': None,
-        'owner': api_key,
-    }
-    asyncio.create_task(_drive_workflow(job_id, handler, playwright_browser, collection_name))
+    # Re-indexing a site someone already indexed is the single most expensive
+    # thing this system can do for no benefit. staleness() returns the reason
+    # an index can't be reused, or None - so the cache hit is the default and
+    # every re-run has to justify itself.
+    existing = corpus.get(homepage_url)
+    reason = corpus.staleness(existing, embed_model=EMBED_MODEL, chunk_size=CHUNK_SIZE)
+    if existing is not None and reason is None and not force:
+        return {
+            "status": "cached",
+            "collection_name": collection_name,
+            "indexed_at": existing.indexed_at,
+            "page_count": existing.page_count,
+            "node_count": existing.node_count,
+            "message": "already indexed and current - pass force:true to re-index",
+        }
+
+    job_id = str(uuid4())
+    job_bus.create_job(
+        job_id, owner=api_key, homepage_url=homepage_url, collection=collection_name
+    )
+    run_etl_task.apply_async(
+        kwargs={
+            "job_id": job_id,
+            "homepage_url": homepage_url,
+            "collection_name": collection_name,
+            "db_path": RAG_DB_PATH,
+        },
+        queue="etl",
+    )
     return {
         "status": "success",
         "job_id": job_id,
         "collection_name": collection_name,
-        "message": "triggered workflow",
+        "reindex_reason": reason,
+        "message": "queued workflow",
     }
-    
+
+
+@app.get('/corpora')
+async def list_corpora(api_key: str = Depends(require_api_key)):
+    """What has been indexed, and whether each index is still good. The UI needs
+    this to offer "open an existing index" without guessing at collection names."""
+    records = corpus.list_all()
+    return {
+        "status": "success",
+        "corpora": [
+            {
+                "url": rec.url,
+                "collection": rec.collection,
+                "page_count": rec.page_count,
+                "node_count": rec.node_count,
+                "indexed_at": rec.indexed_at,
+                "discovery": rec.discovery,
+                "stale_reason": corpus.staleness(
+                    rec, embed_model=EMBED_MODEL, chunk_size=CHUNK_SIZE
+                ),
+            }
+            for rec in records
+        ],
+    }
+
+
 @app.get('/query/status')
 async def query_status(homepage_url: str = '', api_key: str = Depends(require_api_key)):
     if not homepage_url:
@@ -265,35 +233,21 @@ async def stream_events(ws: WebSocket, job_id: str):
     # rejects the handshake.
     offered_subprotocol = ws.headers.get("sec-websocket-protocol")
     await ws.accept(subprotocol=WS_SUBPROTOCOL if offered_subprotocol else None)
-    job_data = active_wfs.get(job_id)
+
+    meta = await job_bus.get_meta(job_id)
     # Same "job not found" message for a missing job and for someone else's
     # job - distinguishing the two would let a caller enumerate other users'
     # job_ids by testing which ones return a different error.
-    if job_data is None or not hmac.compare_digest(job_data.get('owner', ''), api_key):
+    if meta is None or not hmac.compare_digest(meta.get('owner', ''), api_key):
         await ws.send_json({"type": "error", "message": "job not found"})
         await ws.close()
         return
 
-    # Subscribe before snapshotting the log. There is no await between these
-    # two lines, so no event can slip into the gap - the snapshot holds
-    # everything emitted so far, and the queue gets everything after it, with
-    # no overlap and nothing dropped. A client reconnecting mid-run therefore
-    # replays the whole run rather than joining blind.
-    queue: asyncio.Queue = asyncio.Queue()
-    job_data['subscribers'].add(queue)
-    history = list(job_data['events'])
-    already_finished = job_data['finished']
-
+    # job_bus.stream handles replay-then-live with no gap and no duplicate, so
+    # this handler is now just a pipe. It holds no job state of its own, which
+    # is what lets a client reconnect to a different API replica mid-run.
     try:
-        for msg in history:
+        async for msg in job_bus.stream(job_id):
             await ws.send_json(msg)
-        if not already_finished:
-            while True:
-                msg = await queue.get()
-                if msg is None:
-                    break
-                await ws.send_json(msg)
     except WebSocketDisconnect:
         pass
-    finally:
-        job_data['subscribers'].discard(queue)

@@ -222,3 +222,7 @@ frontend/dist/
 omnidoc_search.db/
 *_dir/
 save_dir/
+
+# Corpus registry - local state, like omnidoc_search.db above
+omnidoc_corpus.sqlite3
+omnidoc_corpus.sqlite3-*

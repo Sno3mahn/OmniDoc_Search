@@ -67,6 +67,16 @@ export function StartScreen({ onStarted, onOpenExisting }: Props) {
     setBusy(true)
     try {
       const res: StartJobResponse = await getClient().startJob(url.trim(), apiKey)
+      // The API refuses to re-run a pipeline for a site whose index is still
+      // current. That's a success, not an error - skip straight to querying
+      // rather than showing a failure for the cheapest possible outcome.
+      if (res.status === 'cached') {
+        onOpenExisting({
+          apiKey,
+          sources: [{ homepageUrl: url.trim(), collection: res.collection_name ?? '' }],
+        })
+        return
+      }
       if (res.status !== 'success' || !res.job_id) {
         setError(res.message)
         return

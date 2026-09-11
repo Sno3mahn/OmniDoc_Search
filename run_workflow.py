@@ -3,13 +3,13 @@ from agentic_etl import (
 )
 from import_stuff import (
     extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json,
-    is_safe_url, resolve_markdown_sources, looks_like_markdown, strip_common_boilerplate,
-    get_html_body, extract_toc, file_name_for,
+    resolve_markdown_sources, looks_like_markdown, strip_common_boilerplate,
+    get_html_body, extract_toc, file_name_for, sitemap_urls, fetch_first,
 )
 
 import os
 import re
-import requests
+import json
 import argparse
 import concurrent
 import asyncio
@@ -70,28 +70,52 @@ class ETLWorkflow(Workflow):
                     if os.path.isfile(path):
                         os.remove(path)
 
-            # Fast path: a docs sidebar is structured HTML, so parse it. This was
-            # ~84s of a ~139s pipeline as a ReAct loop; it is milliseconds as a
-            # parse, and on the sites tested it returns the same page set.
+            # Three discovery paths, cheapest and most authoritative first.
+            #
+            #   sitemap  the site declaring its own URL list. No inference, and
+            #            it sees pages a JS-rendered sidebar hides (docusaurus:
+            #            84 pages vs the nav's 29 and the agent's 50).
+            #   nav      parsing the sidebar. Curated rather than complete, and
+            #            it works on sites with no sitemap at all (docs.python.org).
+            #   agent    a ReAct loop over the rendered page. ~84s and an LLM
+            #            bill, so it only runs when both deterministic paths
+            #            come back empty.
+            #
+            # Both cheap paths run and the larger result wins: they cost well
+            # under a second each, and neither dominates across sites (sitemap
+            # won on docusaurus, nav won on fastapi 162-150).
             loop = asyncio.get_running_loop()
-            list_of_contents, file_name_map = [], {}
+            discovery = "agent"
+
+            sitemap_pages, sitemap_names = [], {}
+            nav_pages, nav_names = [], {}
+            try:
+                sitemap_pages, sitemap_names = await loop.run_in_executor(
+                    None, sitemap_urls, self.homepage_url
+                )
+            except Exception as exc:
+                ctx.write_event_to_stream(StatusEmitterEvent(status=f"Sitemap lookup failed ({exc})"))
             try:
                 html = await loop.run_in_executor(None, get_html_body, self.homepage_url)
-                list_of_contents, file_name_map = extract_toc(self.homepage_url, html or "")
+                nav_pages, nav_names = extract_toc(self.homepage_url, html or "")
             except Exception as exc:
-                ctx.write_event_to_stream(StatusEmitterEvent(
-                    status=f"Homepage parse failed ({exc}); handing off to the extraction agent"
-                ))
+                ctx.write_event_to_stream(StatusEmitterEvent(status=f"Homepage nav parse failed ({exc})"))
 
-            if list_of_contents:
+            if sitemap_pages or nav_pages:
+                if len(sitemap_pages) >= len(nav_pages):
+                    list_of_contents, file_name_map, discovery = sitemap_pages, sitemap_names, "sitemap.xml"
+                else:
+                    list_of_contents, file_name_map, discovery = nav_pages, nav_names, "homepage nav"
                 ctx.write_event_to_stream(StatusEmitterEvent(
-                    status=f"Parsed {len(list_of_contents)} doc pages from the homepage nav"
+                    status=f"Found {len(list_of_contents)} doc pages via {discovery} "
+                           f"(sitemap {len(sitemap_pages)}, nav {len(nav_pages)})"
                 ))
             else:
-                # Fallback for markup the parser can't read (JS-rendered nav,
-                # unusual structure) - this is where the agent earns its cost.
+                # Neither deterministic path found anything - unusual markup, or
+                # a nav that only exists after JS runs and no sitemap to cover
+                # for it. This is where the agent earns its cost.
                 ctx.write_event_to_stream(StatusEmitterEvent(
-                    status="No nav found by parsing; using the extraction agent"
+                    status="No sitemap or parseable nav; using the extraction agent"
                 ))
                 res = await run_agent_verbose(self.agents["homepage_extraction_agent"], user_query)
                 res = parse_agent_json(str(res), stage="homepage_extraction_agent")
@@ -102,6 +126,7 @@ class ETLWorkflow(Workflow):
 
             await ctx.store.set("list_of_contents", list_of_contents)
             await ctx.store.set("file_name_map", file_name_map)
+            await ctx.store.set("discovery", discovery)
 
             ctx.write_event_to_stream(StatusEmitterEvent(status="Analyzed homepage content"))
             # Always the md path now: resolve_markdown_sources decides
@@ -163,38 +188,38 @@ class ETLWorkflow(Workflow):
 
         dir_name = await ctx.store.get('dir_name', 'save_dir')
 
-        # TODO: implement extract raw page and clean-up using markdownify
         file_name_map = await ctx.store.get('file_name_map', {})
-        def etl_per_site(site: str):
-            if not is_safe_url(site):
-                raise ValueError(f"Refusing to fetch non-public URL: {site}")
+
+        def etl_per_site(site: str) -> str:
+            """Returns '' on success, or a one-line reason on failure. The
+            fetching itself now lives in import_stuff.fetch, which retries 429s
+            and 5xx with jittered backoff and honours Retry-After - none of
+            which this step used to do, which is most of why a docusaurus run
+            lost 9 of 29 pages."""
             file_name = file_name_map.get(site, '')
             alt_site = md_to_html.get(site, '')
             if not file_name and alt_site:
                 file_name = file_name_map.get(alt_site, '')
-            response = requests.get(site, timeout=15)
-            status = response.status_code
-            if status != 200:
-                if alt_site:
-                    if not is_safe_url(alt_site):
-                        raise ValueError(f"Refusing to fetch non-public URL: {alt_site}")
-                    response = requests.get(alt_site, timeout=15)
-                    status = response.status_code
-                    if status != 200:
-                        raise RuntimeError(f"HTTP {status} fetching both {site} and {alt_site}")
-                    site=alt_site
-                else:
-                    raise RuntimeError(f"HTTP {status} fetching {site}")
+            if not file_name:
+                file_name = file_name_for(alt_site or site)
+
+            # The markdown source and the rendered page are two candidates for
+            # the same page; either succeeding is a success.
+            result, winning_url = fetch_first(site, alt_site)
+            if not result.ok:
+                return result.describe()
+
             # If the source is already markdown, keep it verbatim. Running it
             # through SimpleWebPageReader(html_to_text=True) converts markdown
             # as if it were HTML, which escapes frontmatter into "\--- title:"
             # and mangles fences - degrading the exact clean source the md
             # resolver worked to find.
-            if looks_like_markdown(response.text, response.headers.get("content-type")):
-                content = response.text
+            if looks_like_markdown(result.text, result.content_type):
+                content = result.text
             else:
-                content = extract_page_content([site])[0]
+                content = extract_page_content([winning_url])[0]
             write_to_file(content=content, dir_name=dir_name, file_name=file_name)
+            return ''
 
         failed = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -203,14 +228,20 @@ class ETLWorkflow(Workflow):
             for future in concurrent.futures.as_completed(future_to_url):
                 url = future_to_url[future]
                 try:
-                    future.result()
+                    reason = future.result()
                 except Exception as e:
-                    print(f"{url} generated an exception: {e}")
-                    failed.append(f"{url} ({e})")
+                    reason = f"{url} {type(e).__name__}: {e}"
+                if reason:
+                    print(reason)
+                    failed.append(reason)
 
         if failed:
+            # Cap the detail: 80 failures shouldn't produce an 80-line status
+            # event, but the count still has to be honest.
+            shown = "; ".join(failed[:5])
+            suffix = f" (+{len(failed) - 5} more)" if len(failed) > 5 else ""
             ctx.write_event_to_stream(
-                StatusEmitterEvent(status=f"Failed to save {len(failed)} file(s): " + "; ".join(failed))
+                StatusEmitterEvent(status=f"Failed to save {len(failed)} file(s): {shown}{suffix}")
             )
         ctx.write_event_to_stream(StatusEmitterEvent(status="Completed saving batch of files"))
         return DirNameEvent()
@@ -251,10 +282,19 @@ class ETLWorkflow(Workflow):
         expected = set(file_name_map.values()) or {f'{i}' for i in range(len(list_of_contents))}
         present = set(os.listdir(dir_name))
         missing = len(expected - present)
+        discovery = await ctx.store.get('discovery', 'unknown')
 
-        if missing == 0:
-            return StopEvent(result='{"status":"success","dir_name":"'+dir_name+'"}')
-        return StopEvent(result='{"status":"'+ f'partial success- {missing} of {len(expected)} files missing' +'","dir_name":"'+dir_name+'"}')
+        # json.dumps rather than string concatenation - dir_name and discovery
+        # both derive from user input, and a quote in either produced malformed
+        # JSON that the caller's json.loads then raised on.
+        status = "success" if missing == 0 else f"partial success- {missing} of {len(expected)} files missing"
+        return StopEvent(result=json.dumps({
+            "status": status,
+            "dir_name": dir_name,
+            "discovery": discovery,
+            "pages_expected": len(expected),
+            "pages_saved": len(expected & present),
+        }))
 
 
 

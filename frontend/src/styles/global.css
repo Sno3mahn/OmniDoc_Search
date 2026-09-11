@@ -101,52 +101,5 @@ input {
   min-height: 100%;
 }
 
-/* Top system bar - reads as machine chrome, not a marketing navbar */
-.sysbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 var(--pad);
-  height: 44px;
-  border-bottom: 1px solid var(--line);
-  flex: 0 0 auto;
-}
-
-.sysbar__mark {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--text-hi);
-}
-
-.sysbar__mark span {
-  color: var(--amber);
-}
-
-.sysbar__spacer {
-  flex: 1;
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 3px 9px;
-  border: 1px solid var(--line-bright);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-mid);
-}
-
-.chip__dot {
-  width: 6px;
-  height: 6px;
-  background: var(--text-lo);
-}
-
-.chip--mock .chip__dot {
-  background: var(--amber);
-}
+/* The top bar now lives in components/Navbar.{tsx,css} - it grew a route
+   stepper and a live run readout, which is more than a shared primitive. */

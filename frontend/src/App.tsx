@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { API_MODE } from './api/client'
+import { useCallback, useState } from 'react'
+import { Navbar, type NavRun, type View } from './components/Navbar'
 import { StartScreen } from './screens/StartScreen'
 import { PipelineScreen } from './screens/PipelineScreen'
 import { QueryScreen } from './screens/QueryScreen'
@@ -12,24 +12,34 @@ interface Session {
   jobId?: string
 }
 
-type View = 'start' | 'pipeline' | 'query'
+const IDLE: NavRun = { phase: 'idle' }
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [view, setView] = useState<View>('start')
+  const [run, setRun] = useState<NavRun>(IDLE)
+
+  const reset = useCallback(() => {
+    setSession(null)
+    setRun(IDLE)
+    setView('start')
+  }, [])
+
+  // Stable so PipelineScreen's effect doesn't re-subscribe the WebSocket, and
+  // only stores a change - the stream fires many events per stage.
+  const handleRun = useCallback((next: NavRun) => {
+    setRun((prev) => (prev.phase === next.phase && prev.stage === next.stage ? prev : next))
+  }, [])
 
   return (
     <div className="app-shell">
-      <header className="sysbar">
-        <span className="sysbar__mark">
-          omnidoc<span>://</span>search
-        </span>
-        <span className="sysbar__spacer" />
-        <span className={`chip ${API_MODE === 'mock' ? 'chip--mock' : ''}`}>
-          <span className="chip__dot" />
-          {API_MODE} data
-        </span>
-      </header>
+      <Navbar
+        view={view}
+        run={run}
+        sources={session?.sources ?? []}
+        hasJob={Boolean(session?.jobId)}
+        onNavigate={(v) => (v === 'start' ? reset() : setView(v))}
+      />
 
       {view === 'start' && (
         <StartScreen
@@ -39,10 +49,12 @@ export function App() {
               apiKey: j.apiKey,
               jobId: j.jobId,
             })
+            setRun({ phase: 'running' })
             setView('pipeline')
           }}
           onOpenExisting={(t) => {
             setSession({ sources: t.sources, apiKey: t.apiKey })
+            setRun(IDLE)
             setView('query')
           }}
         />
@@ -58,10 +70,8 @@ export function App() {
             homepageUrl={session.sources[0].homepageUrl}
             apiKey={session.apiKey}
             collection={session.sources[0].collection}
-            onReset={() => {
-              setSession(null)
-              setView('start')
-            }}
+            onRunChange={handleRun}
+            onReset={reset}
             onQuery={() => setView('query')}
           />
         </div>
@@ -76,8 +86,7 @@ export function App() {
             if (session.jobId) {
               setView('pipeline')
             } else {
-              setSession(null)
-              setView('start')
+              reset()
             }
           }}
         />

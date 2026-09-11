@@ -1,0 +1,232 @@
+/* Machine chrome, not a marketing navbar: a mark, a route stepper, and the
+   live state of the run. Hairlines only - no shadow, no gradient, no radius. */
+
+.nav {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  height: 44px;
+  padding-left: var(--pad);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  /* The run indicator has to stay visible from the query screen too, so the
+     bar outranks the scrolling panes rather than scrolling with them. */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--ink-900);
+}
+
+.nav__mark {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-hi);
+  padding-right: 20px;
+  white-space: nowrap;
+}
+
+.nav__mark span {
+  color: var(--amber);
+}
+
+.nav__spacer {
+  flex: 1;
+}
+
+/* Route stepper ------------------------------------------------------- */
+
+.steps {
+  display: flex;
+  align-items: stretch;
+  border-left: 1px solid var(--line);
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: var(--track-mono-label);
+  text-transform: uppercase;
+  color: var(--text-lo);
+  cursor: pointer;
+  transition: color 120ms, background 120ms;
+}
+
+.step__n {
+  font-size: 10px;
+  opacity: 0.55;
+}
+
+.step:hover:not(:disabled) {
+  color: var(--text-hi);
+  background: var(--ink-800);
+}
+
+/* Disabled steps stay readable - they're a map of the flow, so greying them
+   out of legibility would hide where you are going, not just where you can't. */
+.step:disabled {
+  cursor: default;
+  color: var(--text-lo);
+  opacity: 0.45;
+}
+
+.step--active {
+  color: var(--text-hi);
+  background: var(--ink-800);
+  box-shadow: inset 0 -2px 0 var(--amber);
+}
+
+.step--active .step__n {
+  color: var(--amber);
+  opacity: 1;
+}
+
+/* A stage that has been completed reads as reachable history. */
+.step--visited:not(.step--active) {
+  color: var(--text-mid);
+}
+
+/* Live run pill ------------------------------------------------------- */
+
+.nav__state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-left: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+
+.nav__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--text-lo);
+  flex: 0 0 auto;
+}
+
+.nav__state--running {
+  color: var(--amber);
+}
+.nav__state--running .nav__dot {
+  background: var(--amber);
+  animation: nav-pulse 1s steps(2, end) infinite;
+}
+
+.nav__state--done {
+  color: var(--green);
+}
+.nav__state--done .nav__dot {
+  background: var(--green);
+}
+
+.nav__state--failed {
+  color: var(--rose);
+}
+.nav__state--failed .nav__dot {
+  background: var(--rose);
+}
+
+/* steps(), not a fade - this design's motion vocabulary is a blinking
+   terminal cursor, not an easing curve. */
+@keyframes nav-pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+/* Source readout ------------------------------------------------------ */
+
+.nav__srcs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-left: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-mid);
+  min-width: 0;
+}
+
+.nav__srcs b {
+  font-weight: 500;
+  color: var(--text-hi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav__srcs-more {
+  color: var(--text-lo);
+}
+
+/* Mode chip ----------------------------------------------------------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-left: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-lo);
+}
+
+.chip__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--text-lo);
+}
+
+.chip--mock .chip__dot {
+  background: var(--amber);
+}
+
+/* Narrow screens: drop the readouts before the stepper, and the step words
+   before the step numbers. Orientation survives; decoration doesn't. */
+@media (max-width: 860px) {
+  .nav__srcs {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .step__label {
+    display: none;
+  }
+  .step {
+    padding: 0 12px;
+  }
+  .step__n {
+    font-size: 11px;
+    opacity: 1;
+  }
+}
+
+@media (max-width: 520px) {
+  .chip {
+    display: none;
+  }
+}

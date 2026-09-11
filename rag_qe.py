@@ -12,7 +12,7 @@ from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.deepseek import DeepSeek
 from llama_index.core.ingestion import IngestionPipeline
-from llama_index.core.node_parser import MarkdownNodeParser
+from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import BaseRetriever
@@ -26,6 +26,35 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 # from exactly 2 chunks. For docs QA 5-10 is the normal range.
 SIMILARITY_TOP_K = int(os.getenv("RAG_TOP_K", "8"))
 HYBRID_RETRIEVAL = os.getenv("RAG_HYBRID", "1") != "0"
+
+EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+
+# MarkdownNodeParser splits on headings and nothing else, so chunk size is
+# whatever the page author happened to write. Measured on the typer corpus
+# (769 chunks): median 584 chars, but 143 chunks over 2000 and one at 50,257.
+#
+# bge-small-en-v1.5 has a 512-token input window and TRUNCATES silently past
+# it, so every one of those long chunks was embedded from its first ~2000
+# characters while the retriever reported it as a whole-chunk match and the
+# synthesiser was handed the whole thing. The tail of a fifth of the corpus was
+# simply not in the vector store.
+#
+# 256 rather than the model's full 512, because that's what measured best on
+# the typer eval set (52 questions, hybrid retrieval):
+#
+#   chunk   nodes   r@1     r@3     r@10    MRR
+#   none     769    46.2    63.5    82.7    .572   <- heading split only
+#   512     1157    48.1    65.4    80.8    .585
+#   384     1386    50.0    67.3    80.8    .604
+#   256     1962    53.8    67.3    80.8    .627   <- best r@1 and MRR
+#   192     2762    44.2    69.2    84.6    .587
+#   128     5347    42.3    65.4    76.9    .548   <- over-fragmented
+#
+# The curve has a peak, not a direction: too large truncates, too small strips
+# a chunk of the context that makes it matchable. 64 tokens of overlap keeps an
+# answer that straddles a boundary reachable from either side.
+CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "256"))
+CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "64"))
 
 __import__('pysqlite3')
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -173,6 +202,15 @@ class QueryEngine:
             name = doc.metadata.get("file_name", "")
             if name.endswith(".md"):
                 name = name[: -len(".md")]
+            # mkdocs/Sphinx render a permalink pilcrow into every heading, and
+            # html_to_text carries it through. It ends up in the body AND in
+            # MarkdownNodeParser's header_path, so it was in the embedded text
+            # of essentially every chunk - a high-frequency token carrying no
+            # meaning. Cleaned here rather than in the ETL so corpora already
+            # on disk benefit without a re-extract.
+            # set_content, not `doc.text = ...` - Document.text is a read-only
+            # property over text_resource in llama-index 0.14.
+            doc.set_content(doc.get_content().replace("¶", ""))
             # Anchors every chunk to its page, so a chunk from the middle of a
             # page competes on equal footing with one that happens to contain
             # the title. header_path (already embedded) gives the section.
@@ -185,7 +223,7 @@ class QueryEngine:
     def _define_llms(
         self,
         llm_model: str = "deepseek-v4-flash",
-        embedding_model: str = "BAAI/bge-small-en-v1.5",
+        embedding_model: str = EMBED_MODEL,
         batch_size: int = 8,
     ):
         llm = DeepSeek(model=llm_model, api_key=DEEPSEEK_KEY)
@@ -216,7 +254,15 @@ class QueryEngine:
         vector_store = self._define_db(collection_name=collection_name, db_path=self.db_path)
 
         pipeline = IngestionPipeline(
-            transformations=[MarkdownNodeParser(), emb_model],
+            # Heading split first so each chunk inherits a header_path, then a
+            # size split so nothing exceeds the embed model's window. Order
+            # matters: splitting by size first would lose the heading context
+            # that makes a mid-page chunk identifiable.
+            transformations=[
+                MarkdownNodeParser(),
+                SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP),
+                emb_model,
+            ],
             vector_store=vector_store,
         )
 
