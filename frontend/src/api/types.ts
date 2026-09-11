@@ -31,8 +31,16 @@ export interface JobStream {
   close(): void
 }
 
+export interface QueryStatus {
+  ready: boolean
+  collection_name: string
+}
+
 export interface OmniDocClient {
   startJob(homepageUrl: string, apiKey: string): Promise<StartJobResponse>
   subscribeJob(jobId: string, apiKey: string, onEvent: (ev: StreamEvent) => void): JobStream
   query(homepageUrl: string, question: string, apiKey: string): Promise<QueryResponse>
+  /** Whether this site already has a queryable index, so it can be opened
+   *  without paying for a full re-extraction. */
+  queryStatus(homepageUrl: string, apiKey: string): Promise<QueryStatus>
 }

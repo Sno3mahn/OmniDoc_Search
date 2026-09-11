@@ -1,20 +1,52 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getClient } from '../api/client'
 import type { StartJobResponse } from '../api/types'
 import { STAGE_ORDER } from '../lib/stages'
 import './StartScreen.css'
 
-interface Props {
-  onStarted(job: { jobId: string; homepageUrl: string; apiKey: string; collection: string }): void
+export interface OpenTarget {
+  homepageUrl: string
+  apiKey: string
+  collection: string
 }
 
-export function StartScreen({ onStarted }: Props) {
+interface Props {
+  onStarted(job: { jobId: string; homepageUrl: string; apiKey: string; collection: string }): void
+  onOpenExisting(target: OpenTarget): void
+}
+
+export function StartScreen({ onStarted, onOpenExisting }: Props) {
   const [url, setUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [existing, setExisting] = useState<string>('')
 
   const canRun = url.trim().length > 0 && !busy
+
+  // Re-extracting a site that's already indexed costs a full agent run, so
+  // check whether one exists and offer to open it instead. Debounced, and
+  // only once there's a key to authenticate the check with.
+  useEffect(() => {
+    const trimmed = url.trim()
+    setExisting('')
+    if (!trimmed || !apiKey) return
+
+    let cancelled = false
+    const t = setTimeout(async () => {
+      try {
+        const status = await getClient().queryStatus(trimmed, apiKey)
+        if (!cancelled && status.ready) setExisting(status.collection_name)
+      } catch {
+        /* a failed probe just means no shortcut is offered */
+      }
+    }, 500)
+
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [url, apiKey])
 
   async function run() {
     if (!canRun) return
@@ -90,9 +122,25 @@ export function StartScreen({ onStarted }: Props) {
           </button>
         </div>
 
-        <p className="start__hint">
-          Private and loopback addresses are rejected by the API before any fetch happens.
-        </p>
+        {existing ? (
+          <div className="start__existing">
+            <span className="start__existing-text">
+              <b>{existing}</b> is already indexed — no need to extract it again.
+            </span>
+            <button
+              className="cmd cmd--ghost"
+              onClick={() =>
+                onOpenExisting({ homepageUrl: url.trim(), apiKey, collection: existing })
+              }
+            >
+              Query it →
+            </button>
+          </div>
+        ) : (
+          <p className="start__hint">
+            Private and loopback addresses are rejected by the API before any fetch happens.
+          </p>
+        )}
 
         <div className="stages">
           {STAGE_ORDER.map((s, i) => (

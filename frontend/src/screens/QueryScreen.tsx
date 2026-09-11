@@ -16,16 +16,16 @@ interface Props {
   homepageUrl: string
   apiKey: string
   collection: string
+  /** False when opened directly against an existing index, so there's no run
+   *  to go "back" to. */
+  hasRun: boolean
   onBack(): void
 }
 
 let turnSeq = 0
 
-/** The LLM answers in prose that usually carries inline-code backticks. Render
- *  those as real code spans rather than leaking the markdown. Built as React
- *  nodes, not innerHTML - the answer text is model output, never trusted. */
 function renderInlineCode(text: string) {
-  return text.split(/(`[^`]+`)/g).map((part, i) =>
+  return text.split(/(`[^`\n]+`)/g).map((part, i) =>
     part.startsWith('`') && part.endsWith('`') && part.length > 2 ? (
       <code key={i}>{part.slice(1, -1)}</code>
     ) : (
@@ -34,7 +34,39 @@ function renderInlineCode(text: string) {
   )
 }
 
-export function QueryScreen({ homepageUrl, apiKey, collection, onBack }: Props) {
+/** Answers come back as markdown: prose with inline backticks AND fenced code
+ *  blocks. Fences have to be pulled out first - treating the whole answer as
+ *  inline spans turns a multi-line code sample into a wall of chips, which is
+ *  exactly what happened the first time this met real DeepSeek output (the
+ *  mock only ever produced inline backticks).
+ *
+ *  Rendered as React nodes, never innerHTML - this is model output. */
+function renderAnswer(text: string) {
+  const parts = text.split(/```[ \t]*(\w*)\n?([\s\S]*?)```/g)
+  const out: React.ReactNode[] = []
+
+  for (let i = 0; i < parts.length; i += 3) {
+    const prose = parts[i]
+    if (prose && prose.trim()) {
+      out.push(
+        <p key={`p${i}`} className="ans__p">
+          {renderInlineCode(prose.trim())}
+        </p>,
+      )
+    }
+    const code = parts[i + 2]
+    if (code !== undefined) {
+      out.push(
+        <pre key={`c${i}`} className="ans__pre">
+          <code>{code.replace(/\n+$/, '')}</code>
+        </pre>,
+      )
+    }
+  }
+  return out
+}
+
+export function QueryScreen({ homepageUrl, apiKey, collection, hasRun, onBack }: Props) {
   const [turns, setTurns] = useState<Turn[]>([])
   const [draft, setDraft] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -101,7 +133,7 @@ export function QueryScreen({ homepageUrl, apiKey, collection, onBack }: Props) 
 
             {t.error && <div className="turn__error">✕ {t.error}</div>}
 
-            {t.answer && <p className="turn__answer">{renderInlineCode(t.answer)}</p>}
+            {t.answer && <div className="turn__answer">{renderAnswer(t.answer)}</div>}
 
             {t.sources && t.sources.length > 0 && (
               <div className="srcs">
@@ -148,7 +180,7 @@ export function QueryScreen({ homepageUrl, apiKey, collection, onBack }: Props) 
 
         <div className="pipe__foot">
           <button className="linkish" onClick={onBack}>
-            ← back to run
+            {hasRun ? '← back to run' : '← new run'}
           </button>
         </div>
         <div ref={bottomRef} />

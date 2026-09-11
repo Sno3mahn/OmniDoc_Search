@@ -2,6 +2,7 @@ import type {
   JobStream,
   OmniDocClient,
   QueryResponse,
+  QueryStatus,
   StartJobResponse,
   StreamEvent,
 } from './types'
@@ -60,6 +61,13 @@ export class LiveClient implements OmniDocClient {
         }
       },
     }
+  }
+
+  async queryStatus(homepageUrl: string, apiKey: string): Promise<QueryStatus> {
+    const url = `${HTTP_BASE}/query/status?homepage_url=${encodeURIComponent(homepageUrl)}`
+    const res = await fetch(url, { headers: { 'x-api-key': apiKey } })
+    if (!res.ok) return { ready: false, collection_name: '' }
+    return res.json()
   }
 
   async query(homepageUrl: string, question: string, apiKey: string): Promise<QueryResponse> {

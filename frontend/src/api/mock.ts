@@ -2,9 +2,16 @@ import type {
   JobStream,
   OmniDocClient,
   QueryResponse,
+  QueryStatus,
   StartJobResponse,
   StreamEvent,
 } from './types'
+
+/** Module-level so it survives getClient() handing out fresh instances: once a
+ *  scripted run finishes, that site reads as already-indexed, the same way the
+ *  live backend would. */
+const mockIndexed = new Set<string>()
+let lastStartedUrl = ''
 
 /** Status strings are copied verbatim from the StatusEmitterEvent calls in
  *  run_workflow.py, so the UI is built against the real vocabulary rather
@@ -81,11 +88,20 @@ export class MockClient implements OmniDocClient {
     if (/localhost|127\.0\.0\.1|192\.168\.|10\.|169\.254\./.test(homepageUrl)) {
       return { status: 'failed', message: 'homepage_url is not a permitted public address' }
     }
+    lastStartedUrl = homepageUrl
     return {
       status: 'success',
       job_id: 'mock-job-7f3c',
       collection_name: collectionNameFor(homepageUrl),
       message: 'triggered workflow',
+    }
+  }
+
+  async queryStatus(homepageUrl: string): Promise<QueryStatus> {
+    await delay(200)
+    return {
+      ready: mockIndexed.has(homepageUrl),
+      collection_name: collectionNameFor(homepageUrl),
     }
   }
 
@@ -98,7 +114,9 @@ export class MockClient implements OmniDocClient {
       elapsed += step.after
       timers.push(
         setTimeout(() => {
-          if (!cancelled) onEvent(step.ev)
+          if (cancelled) return
+          if (step.ev.type === 'done') mockIndexed.add(lastStartedUrl)
+          onEvent(step.ev)
         }, elapsed),
       )
     }
