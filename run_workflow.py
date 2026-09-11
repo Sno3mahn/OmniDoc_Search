@@ -3,7 +3,7 @@ from agentic_etl import (
 )
 from import_stuff import (
     extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json,
-    is_safe_url,
+    is_safe_url, resolve_markdown_sources,
 )
 
 import os
@@ -79,37 +79,30 @@ class ETLWorkflow(Workflow):
     @step
     async def get_markdown_links(self, ctx: Context, ev: MDifyEvent) -> ExtractWebpageEvent | None:
 
-        list_of_contents = await ctx.store.get("list_of_contents", self.homepage_url)
-        user_query = f'''
-        For the URLs in list_of_contents {list_of_contents}, use browse_page to load the page and locate any link/button giving direct access to Markdown/raw source. Prioritize (in order):
-
-        1. "Edit this page" / "Edit on GitHub" / "Improve this doc" / pencil ✏️ / GitHub link → follow to GitHub blob → convert to raw URL:
-        2. If in Github, extract the html and finding the href assigned to the button raw will give you the expected md link
-        3. "View source" / "Raw" / "Markdown view" / "Plain text" button/link
-
-        If found on one page, apply the **same raw pattern** to all other URLs from the same site/repo (same domain/GitHub org).
-
-        If no source found for a URL → leave it unchanged.
-
-        Final response must be **only** this JSON in this structure, nothing else (don't bluntly copy the same json example):\n
-        ''' + '\'{"html_to_md": {"https://docs.some_framework.com/.../page":"https://raw.githubusercontent.com/.../page.md", ...}, "source_found": true/false}\''
+        list_of_contents = await ctx.store.get("list_of_contents", [])
 
         ctx.write_event_to_stream(StatusEmitterEvent(status="Scanning contents for md links"))
-        # Finding raw markdown sources is an optimisation, not a prerequisite -
-        # the pages can still be extracted as rendered HTML. An off-schema answer
-        # or a malformed tool call from the agent (e.g. a tool call with null
-        # arguments, which makes llama-index raise on json.loads) must not take
-        # the whole run down with it.
+        # Deterministic, not agentic. This used to hand every URL to a ReAct
+        # agent and ask it to browse each one - hundreds of LLM calls to derive
+        # a single URL-rewrite rule. resolve_markdown_sources proves a rule on a
+        # 3-page sample and applies it in plain Python: zero LLM calls, and the
+        # result is reproducible enough to unit-test.
+        loop = asyncio.get_running_loop()
         try:
-            res = await run_agent_verbose(self.agents["md_ify_agent"], user_query)
-            res = parse_agent_json(str(res), stage="md_ify_agent")
-            html_to_md = res.get("html_to_md", {})
-            source_found = res.get("source_found", False)
+            html_to_md, strategy = await loop.run_in_executor(
+                None, resolve_markdown_sources, list_of_contents
+            )
         except Exception as exc:
             ctx.write_event_to_stream(StatusEmitterEvent(
                 status=f"Markdown source detection failed ({exc}); falling back to rendered pages"
             ))
-            html_to_md, source_found = {}, False
+            html_to_md, strategy = {}, "none"
+
+        source_found = strategy != "none"
+        ctx.write_event_to_stream(StatusEmitterEvent(
+            status=f"Markdown sources found via {strategy}" if source_found
+            else "No raw markdown sources; extracting rendered pages"
+        ))
 
         if not html_to_md:
             html_to_md = {url: url for url in list_of_contents}

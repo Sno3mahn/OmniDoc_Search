@@ -1,5 +1,5 @@
 from import_stuff import (
-    PATTERN_MATCHING_PROMPT, MD_IFICATION_PROMPT, HOMEPAGE_EXTRACTION_PROMPT,
+    PATTERN_MATCHING_PROMPT, HOMEPAGE_EXTRACTION_PROMPT,
     get_html_body, extract_page_content, sandboxed_code_interpreter,
 )
 
@@ -76,20 +76,12 @@ async def build_agents(use_playwright: bool = True) -> Tuple[Dict[str, Any], Any
             system_prompt=HOMEPAGE_EXTRACTION_PROMPT,
             tools=fetch_tools_with_fallback,
         ),
-        # ReActAgent, not FunctionAgent: FunctionAgent requires
-        # llm.metadata.is_function_calling_model, which the llama-index DeepSeek
-        # integration reports False for deepseek-v4-flash (it isn't in the
-        # integration's known-models list). With FunctionAgent this step raised
-        # "LLM must be a FunctionCallingLLM" on every single run, so markdown
-        # source detection never actually ran. ReAct uses text-based reasoning
-        # and works with this LLM, same as the other two agents here.
-        "md_ify_agent": ReActAgent(
-            name="md_ify_agent",
-            description="Amends links to list of contents to md or txt or similar format of the page and notify if task was a success or not",
-            llm=llm,
-            system_prompt=MD_IFICATION_PROMPT,
-            tools=fetch_tools_with_fallback,
-        ),
+        # md_ify_agent removed: markdown-source detection is now
+        # import_stuff/md_source.resolve_markdown_sources, which proves a URL
+        # rewrite rule on a 3-page sample and applies it in plain Python. The
+        # agent was being handed every URL on the site and asked to browse each
+        # one - hundreds of LLM calls for a single rule - and MD_IFICATION_PROMPT
+        # is kept in prompts.py only for reference.
         "pattern_matching_agent": ReActAgent(
             name="pattern_matching_agent",
             description="Returns python code to clean up md files after identifying patterns in the homepage",
