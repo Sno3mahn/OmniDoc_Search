@@ -1,0 +1,336 @@
+#!/usr/bin/env bash
+#
+# OmniDoc Search - start, stop and inspect the whole stack.
+#
+# Five processes have to be up for the system to work end to end, and three of
+# them are easy to forget: the API accepts jobs whether or not a worker exists
+# to run them, so a half-started stack looks healthy and silently does nothing.
+# This script starts all of them, waits for each to actually be ready rather
+# than sleeping and hoping, and only stops what it started.
+#
+#   ./omnidoc up        start everything (idempotent)
+#   ./omnidoc down      stop everything this script started
+#   ./omnidoc status    what is running
+#   ./omnidoc logs      tail all logs (or: logs api | etl | ingest | web | redis)
+#   ./omnidoc restart   down, then up
+#   ./omnidoc doctor    check prerequisites without starting anything
+
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+VENV="${OMNIDOC_VENV:-/Users/ricky/Documents/workspace/agents_learn/agent_env}"
+RUN_DIR="$ROOT/.run"
+LOG_DIR="$RUN_DIR/logs"
+API_PORT="${OMNIDOC_API_PORT:-8000}"
+# Pinned, not "whatever vite picks". CORS_ORIGINS in api.py defaults to 5173,
+# so a frontend that silently lands on 5174 gets its fetches blocked by the
+# browser with no server-side error to find.
+WEB_PORT="${OMNIDOC_WEB_PORT:-5173}"
+REDIS_PORT="${OMNIDOC_REDIS_PORT:-6379}"
+
+SERVICES=(redis etl ingest api web)
+
+c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
+ok()   { printf "  ${c_grn}ok${c_off}    %s\n" "$*"; }
+warn() { printf "  ${c_yel}warn${c_off}  %s\n" "$*"; }
+fail() { printf "  ${c_red}fail${c_off}  %s\n" "$*"; }
+info() { printf "  ${c_dim}·${c_off}     %s\n" "$*"; }
+
+pidfile() { echo "$RUN_DIR/$1.pid"; }
+logfile() { echo "$LOG_DIR/$1.log"; }
+
+is_running() {
+  local pf; pf="$(pidfile "$1")"
+  [[ -f "$pf" ]] || return 1
+  local pid; pid="$(cat "$pf" 2>/dev/null)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+port_busy() { lsof -ti ":$1" >/dev/null 2>&1; }
+
+# Poll for a condition instead of sleeping a guessed interval: startup time
+# varies a lot here (both workers import torch, which takes tens of seconds).
+# Takes the service name so it can abort the moment that process dies - waiting
+# out a 90s timeout on a process that crashed in the first second is the worst
+# possible feedback.
+wait_for() {
+  local name="$1" label="$2" timeout="$3"; shift 3
+  local deadline=$(( SECONDS + timeout ))
+  while (( SECONDS < deadline )); do
+    if "$@" >/dev/null 2>&1; then return 0; fi
+    if [[ -n "$name" ]] && ! is_running "$name"; then
+      fail "$label exited during startup"
+      tail -n 12 "$(logfile "$name")" 2>/dev/null | sed 's/^/        /'
+      return 1
+    fi
+    sleep 0.4
+  done
+  fail "$label did not become ready within ${timeout}s"
+  return 1
+}
+
+redis_up()  { redis-cli -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; }
+api_up()    { curl -fsS "http://localhost:$API_PORT/health_check" 2>/dev/null | grep -q OK; }
+web_up()    { curl -fsS "http://localhost:$WEB_PORT/" >/dev/null 2>&1; }
+# Read the worker's own log rather than running `celery inspect ping`. The
+# ping probe costs ~9.5s per call because it imports tasks.py (and therefore
+# torch) from scratch every time, which makes it useless as a poll: it barely
+# gets nine attempts inside a 90s budget, each racing the worker's own equally
+# slow startup. The worker states its own readiness in one line, instantly.
+# start_bg rotates the log first, so a "ready." from a previous run can't
+# satisfy this.
+worker_up() { grep -q "celery@\|ready\." "$(logfile "$1")" 2>/dev/null; }
+
+start_bg() {
+  local name="$1"; shift
+  mkdir -p "$LOG_DIR"
+  local log; log="$(logfile "$name")"
+  # Rotate rather than append: readiness is detected by grepping this file, so
+  # a previous run's "ready." would otherwise report success instantly. Also
+  # keeps logs from growing without bound.
+  [[ -f "$log" ]] && mv -f "$log" "$log.prev"
+  : > "$log"
+  # nohup + disown so the service survives this script exiting.
+  nohup "$@" >>"$log" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$(pidfile "$name")"
+  disown "$pid" 2>/dev/null || true
+}
+
+# --- doctor ----------------------------------------------------------------
+
+doctor() {
+  local problems=0
+  echo "prerequisites"
+
+  if [[ -x "$VENV/bin/python" ]]; then ok "venv        $VENV"
+  else fail "venv missing at $VENV (override with OMNIDOC_VENV)"; ((problems++)); fi
+
+  for pkg in celery redis fastapi llama_index chromadb playwright; do
+    if "$VENV/bin/python" -c "import $pkg" >/dev/null 2>&1; then ok "python      $pkg"
+    else fail "python package '$pkg' not importable in the venv"; ((problems++)); fi
+  done
+
+  command -v redis-server >/dev/null && ok "binary      redis-server" \
+    || { fail "redis-server not on PATH (brew install redis)"; ((problems++)); }
+  command -v npm >/dev/null && ok "binary      npm" \
+    || { fail "npm not on PATH"; ((problems++)); }
+
+  [[ -d "$ROOT/frontend/node_modules" ]] && ok "frontend    node_modules present" \
+    || { warn "frontend deps missing - run: cd frontend && npm install"; ((problems++)); }
+
+  # Keys may come from .env OR the surrounding shell; .env is loaded by
+  # python-dotenv without overriding real environment variables.
+  echo "configuration"
+  for key in API_DEEPSEEK API_KEY; do
+    if "$VENV/bin/python" - "$key" "$ROOT/.env" <<'PY'
+import os, sys
+from dotenv import load_dotenv
+# Explicit path: dotenv's find_dotenv() walks the caller's stack frames, which
+# do not exist when the script is piped in on stdin, and it asserts rather than
+# returning nothing.
+load_dotenv(sys.argv[2])
+sys.exit(0 if os.getenv(sys.argv[1]) else 1)
+PY
+    then ok "env         $key is set"
+    else fail "env $key is not set (.env or shell export)"; ((problems++)); fi
+  done
+
+  echo "ports"
+  for p in "$REDIS_PORT:redis" "$API_PORT:api" "$WEB_PORT:web"; do
+    local port="${p%%:*}" what="${p##*:}"
+    if port_busy "$port"; then
+      if [[ "$what" == "redis" ]] && redis_up; then info "port $port ($what) already serving redis - will reuse"
+      else warn "port $port ($what) is in use by something else"; fi
+    else ok "port        $port free ($what)"; fi
+  done
+
+  echo
+  (( problems == 0 )) && echo "${c_grn}ready${c_off}" || echo "${c_red}$problems problem(s) above${c_off}"
+  return $(( problems > 0 ))
+}
+
+# --- up --------------------------------------------------------------------
+
+up() {
+  mkdir -p "$RUN_DIR" "$LOG_DIR"
+  echo "starting omnidoc-search"
+
+  # redis -----------------------------------------------------------------
+  if redis_up; then
+    if is_running redis; then info "redis     already running (ours)"
+    else
+      # Someone else's redis (brew services, another project). Record that we
+      # did not start it so `down` doesn't kill a process we don't own.
+      touch "$RUN_DIR/redis.external"
+      info "redis     already running (external - will not be stopped by 'down')"
+    fi
+  else
+    rm -f "$RUN_DIR/redis.external"
+    start_bg redis redis-server --port "$REDIS_PORT" --save '' --appendonly no
+    wait_for redis "redis" 20 redis_up || return 1
+    ok "redis     :$REDIS_PORT"
+  fi
+
+  # celery workers --------------------------------------------------------
+  # PYTHONPATH is required: the ETL task imports agentic_etl/run_workflow by
+  # module name, and celery does not reliably put the invocation directory on
+  # sys.path for those deferred imports.
+  export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+  # --pool=solo is a macOS necessity, not a preference: the default prefork
+  # pool aborts with SIGABRT/WorkerLostError because the ML and Playwright
+  # stacks are not fork-safe here. On Linux use prefork with --concurrency.
+  local pool_args=(--pool=solo)
+  [[ "$(uname -s)" != "Darwin" ]] && pool_args=(--concurrency="${OMNIDOC_CONCURRENCY:-2}")
+
+  for q in etl ingest; do
+    if is_running "$q"; then info "$q worker already running"; continue
+    fi
+    start_bg "$q" "$VENV/bin/celery" -A tasks worker -Q "$q" "${pool_args[@]}" \
+      -n "$q@%h" --loglevel=info
+  done
+  # Workers are slow to boot (torch import), so wait on both after launching
+  # both rather than serially.
+  for q in etl ingest; do
+    wait_for "$q" "$q worker" 180 worker_up "$q" || { fail "see $(logfile "$q")"; return 1; }
+    ok "$q worker"
+  done
+
+  # api -------------------------------------------------------------------
+  if is_running api; then info "api       already running"
+  elif port_busy "$API_PORT"; then
+    fail "port $API_PORT is in use but not by us - stop it first (lsof -ti :$API_PORT)"
+    return 1
+  else
+    start_bg api "$VENV/bin/uvicorn" api:app --port "$API_PORT"
+    wait_for api "api" 90 api_up || { fail "see $(logfile api)"; return 1; }
+  fi
+  ok "api       http://localhost:$API_PORT"
+
+  # frontend --------------------------------------------------------------
+  if is_running web; then info "web       already running"
+  elif port_busy "$WEB_PORT"; then
+    fail "port $WEB_PORT is in use but not by us - the frontend must have this exact port for CORS"
+    return 1
+  else
+    start_bg web npm --prefix "$ROOT/frontend" run dev -- --port "$WEB_PORT" --strictPort
+    wait_for web "web" 60 web_up || { fail "see $(logfile web)"; return 1; }
+  fi
+  ok "web       http://localhost:$WEB_PORT"
+
+  echo
+  echo "  open ${c_grn}http://localhost:$WEB_PORT${c_off}"
+  local key; key="$(grep -E '^API_KEY=' "$ROOT/.env" 2>/dev/null | cut -d= -f2-)"
+  [[ -n "$key" ]] && echo "  api key   $key" || echo "  api key   (from your shell's API_KEY export)"
+  echo "  logs      ./omnidoc logs"
+}
+
+# --- down ------------------------------------------------------------------
+
+stop_one() {
+  local name="$1"
+  if ! is_running "$name"; then rm -f "$(pidfile "$name")"; return 1; fi
+  local pid; pid="$(cat "$(pidfile "$name")")"
+  # Kill the process group: npm spawns vite as a child, and celery/uvicorn can
+  # too, so signalling only the recorded pid leaves orphans holding the ports.
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+  for _ in $(seq 1 20); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+  fi
+  rm -f "$(pidfile "$name")"
+  return 0
+}
+
+down() {
+  echo "stopping omnidoc-search"
+  # Reverse order: stop accepting work before stopping the things that do it.
+  for name in web api etl ingest; do
+    if stop_one "$name"; then ok "stopped   $name"; else info "$name not running"; fi
+  done
+
+  if [[ -f "$RUN_DIR/redis.external" ]]; then
+    info "redis     left running (started outside this script)"
+    rm -f "$RUN_DIR/redis.external"
+  elif stop_one redis; then ok "stopped   redis"
+  else info "redis not running"; fi
+}
+
+# --- status ----------------------------------------------------------------
+
+status() {
+  printf "%-8s %-10s %-8s %s\n" SERVICE STATE PID DETAIL
+  for name in "${SERVICES[@]}"; do
+    local state detail pid
+    if is_running "$name"; then
+      pid="$(cat "$(pidfile "$name")")"; state="${c_grn}up${c_off}"
+    elif [[ "$name" == "redis" ]] && redis_up; then
+      pid="-"; state="${c_yel}external${c_off}"
+    else
+      pid="-"; state="${c_red}down${c_off}"
+    fi
+    case "$name" in
+      redis)  detail=":$REDIS_PORT" ;;
+      api)    detail="http://localhost:$API_PORT" ;;
+      web)    detail="http://localhost:$WEB_PORT" ;;
+      *)      detail="celery queue '$name'" ;;
+    esac
+    printf "%-8s %-19b %-8s %s\n" "$name" "$state" "$pid" "$detail"
+  done
+
+  if api_up; then
+    echo
+    echo "indexed corpora:"
+    local key payload
+    key="$(grep -E '^API_KEY=' "$ROOT/.env" 2>/dev/null | cut -d= -f2-)"
+    payload="$(curl -fsS -H "x-api-key: ${key:-${API_KEY:-}}" \
+      "http://localhost:$API_PORT/corpora" 2>/dev/null)"
+    # The JSON goes in as an argument, not on stdin: the heredoc below already
+    # owns python's stdin, so piping curl into it would have python parsing its
+    # own source as JSON.
+    "$VENV/bin/python" - "$payload" <<'PY'
+import json, sys, time
+try:
+    rows = json.loads(sys.argv[1]).get("corpora", [])
+except Exception:
+    print("  (could not read /corpora - check API_KEY)")
+    sys.exit(0)
+if not rows:
+    print("  (none yet)")
+    sys.exit(0)
+for r in rows:
+    age = (time.time() - r["indexed_at"]) / 3600
+    stale = r.get("stale_reason") or "current"
+    print(f"  {r['url']:<38.38s} {r['page_count']:>4} pages {r['node_count']:>6} chunks "
+          f"{age:>6.1f}h ago  via {(r.get('discovery') or '?'):<13s} [{stale}]")
+PY
+  fi
+}
+
+logs() {
+  mkdir -p "$LOG_DIR"
+  if [[ $# -gt 0 ]]; then tail -f "$(logfile "$1")"; else
+    local files=(); for n in "${SERVICES[@]}"; do
+      touch "$(logfile "$n")"; files+=("$(logfile "$n")"); done
+    tail -f "${files[@]}"
+  fi
+}
+
+# Exit with the subcommand's status so this is usable from CI or a Makefile -
+# a failed `up` must not look like success to whatever called it.
+case "${1:-up}" in
+  up)      up ;;
+  down)    down ;;
+  restart) down; echo; up ;;
+  status)  status ;;
+  logs)    shift; logs "$@" ;;
+  doctor)  doctor ;;
+  *)       sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 64 ;;
+esac
+exit $?

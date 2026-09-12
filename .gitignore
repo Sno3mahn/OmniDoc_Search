@@ -229,3 +229,6 @@ omnidoc_corpus.sqlite3-*
 
 # Per-run extraction output (job-scoped; pruned after OMNIDOC_RUN_TTL_SECONDS)
 runs/
+
+# Runtime pids and logs from ./omnidoc
+.run/
