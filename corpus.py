@@ -35,7 +35,7 @@ from urllib.parse import urlparse, urlunparse
 
 # Bump when a pipeline change alters extracted output for the same input.
 # Anything indexed under an older version is stale by definition.
-PIPELINE_VERSION = 3
+PIPELINE_VERSION = 4
 
 DEFAULT_TTL_SECONDS = int(os.getenv("CORPUS_TTL_SECONDS", str(14 * 24 * 3600)))
 # How old a record must be before it's worth spending an HTTP request to ask

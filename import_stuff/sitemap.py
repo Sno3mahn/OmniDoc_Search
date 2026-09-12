@@ -20,7 +20,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .security import is_safe_url
-from .toc import _SKIP_EXT_RE, _SKIP_PATH_RE, file_name_for
+from .toc import _SKIP_EXT_RE, _SKIP_PATH_RE, build_file_name_map
 
 _TIMEOUT = 10
 # A sitemap index can fan out to dozens of children; docs sites rarely need
@@ -108,9 +108,24 @@ def _is_doc_url(url: str, homepage_url: str, base_path: str) -> bool:
         return False
     if _SKIP_PATH_RE.search(path) or _SKIP_EXT_RE.search(path):
         return False
-    if _VERSIONED_PATH_RE.search(path):
+
+    # Apply the locale and version filters only BELOW the requested root. The
+    # prefix the caller asked for is the request, not noise: given
+    # https://docs.pytest.org/en/stable/, "en" is a locale segment and "stable"
+    # sits where a version does, so filtering the whole path rejected every
+    # page of the very site that was asked for - pytest's sitemap yielded 0
+    # usable URLs and discovery silently fell back to nav parsing.
+    # base_path always ends in "/", so slice from one char earlier to KEEP the
+    # leading slash: both regexes below match "/segment/" shapes, and a
+    # remainder of "2.x/advanced" instead of "/2.x/advanced" silently matches
+    # neither - which let every archived doc version back in (docusaurus went
+    # from 84 pages to 1069, mostly near-duplicate old versions).
+    remainder = path[len(base_path) - 1:] if base_path else path
+    if _VERSIONED_PATH_RE.search(remainder):
         return False
-    for segment in path.strip("/").split("/"):
+    for segment in remainder.strip("/").split("/"):
+        if not segment:
+            continue
         match = _LOCALE_PATH_RE.fullmatch(f"/{segment}/")
         if match and segment.lower() not in _LOCALE_ALLOW:
             return False
@@ -217,4 +232,4 @@ def sitemap_urls(
 
     if len(ordered) < min_links:
         return [], {}
-    return ordered, {url: file_name_for(url) for url in ordered}
+    return ordered, build_file_name_map(ordered)

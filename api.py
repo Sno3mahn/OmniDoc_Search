@@ -222,9 +222,16 @@ async def query_docs(request: Request, api_key: str = Depends(require_api_key)):
 
     try:
         if len(collections) == 1:
-            engine = query_engine.get_query_engine(collections[0])
+            # The fingerprint lets the engine cache notice a re-index that
+            # happened in the ingest worker process, which this one never sees.
+            rec = corpus.get(urls[0])
+            engine = query_engine.get_query_engine(
+                collections[0], fingerprint=rec.fingerprint if rec else None
+            )
         else:
             engine = query_engine.build_multi_query_engine(collections)
+        if engine is None:
+            return {"status": "failed", "message": "index not available for this source"}
         response = await engine.aquery(question)
     except Exception as ex:
         return {"status": "failed", "message": str(ex)}

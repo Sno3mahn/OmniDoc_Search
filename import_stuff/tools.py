@@ -4,6 +4,7 @@ import sys
 import tempfile
 from typing import List
 
+import html2text
 import requests
 from bs4 import BeautifulSoup
 from llama_index.readers.web import SimpleWebPageReader
@@ -24,6 +25,23 @@ def extract_page_content(sites: List[str]) -> List[str]:
     pages_content=[doc.get_content() for doc in docs]
     return pages_content
 
+
+
+def html_to_text(html: str) -> str:
+    """HTML -> markdown-ish text, from a string we already hold.
+
+    SimpleWebPageReader(html_to_text=True).load_data([url]) does the same
+    conversion but fetches the URL to get there - and measurably fetches it
+    TWICE. Since the pipeline has already fetched and retried that exact page,
+    routing through the reader made every HTML page cost three requests instead
+    of one: ~250 requests for an 84-page site. Those extra fetches also bypass
+    fetch_page's retry/backoff entirely, so they were both the likeliest cause
+    of the rate-limiting that lost 9 of 29 pages on an early docusaurus run and
+    the least able to recover from it.
+
+    Same underlying converter the reader uses, so extracted text is unchanged.
+    """
+    return html2text.html2text(html)
 
 
 def get_html_body(url: str):

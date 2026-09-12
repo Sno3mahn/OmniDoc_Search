@@ -8,6 +8,7 @@ The agent stays as a fallback for sites where this finds nothing (unusual
 markup, or a nav that only exists after JS runs).
 """
 
+import hashlib
 import re
 from typing import Dict, List, Tuple
 from urllib.parse import urldefrag, urljoin, urlparse
@@ -59,6 +60,35 @@ def file_name_for(url: str) -> str:
     return f"{slug or 'index'}.md"
 
 
+def build_file_name_map(urls: List[str]) -> Dict[str, str]:
+    """URL -> filename, guaranteed collision-free.
+
+    file_name_for is per-URL and cannot see the rest of the site, so it maps
+    /docs/a/b and /docs/a-b onto the same "docs-a-b.md" - every path separator
+    and every punctuation run collapses to the same "-". Since the whole corpus
+    lands in one flat directory, the second page silently overwrites the first,
+    and because the completion check compares filename SETS the lost page isn't
+    even reported missing.
+
+    Disambiguating here rather than inside file_name_for keeps the readable
+    name for the overwhelmingly common case and only suffixes actual clashes.
+    The suffix is derived from the URL, not a counter, so a given page keeps
+    the same filename across runs even if discovery order changes - otherwise
+    the corpus fingerprint would move on every run and defeat the cache.
+    """
+    taken: Dict[str, str] = {}   # filename -> url that claimed it
+    mapping: Dict[str, str] = {}
+    for url in urls:
+        name = file_name_for(url)
+        if taken.get(name, url) != url:
+            stem, dot, ext = name.rpartition(".")
+            digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:6]
+            name = f"{stem or name}-{digest}{dot}{ext}"
+        taken[name] = url
+        mapping[url] = name
+    return mapping
+
+
 def extract_toc(homepage_url: str, html: str, min_links: int = 3) -> Tuple[List[str], Dict[str, str]]:
     """Returns (doc_urls, file_name_map). Empty list means 'fall back to the agent'."""
     if not html:
@@ -88,4 +118,4 @@ def extract_toc(homepage_url: str, html: str, min_links: int = 3) -> Tuple[List[
     if len(seen) < min_links:
         return [], {}
 
-    return seen, {url: file_name_for(url) for url in seen}
+    return seen, build_file_name_map(seen)

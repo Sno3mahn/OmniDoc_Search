@@ -157,6 +157,12 @@ class QueryEngine:
         # can't be a single flat attribute anymore.
         self._ready: Dict[str, bool] = {}
         self._query_engines: Dict[str, Any] = {}
+        # Corpus fingerprint each cached engine was built against. Ingestion
+        # happens in a DIFFERENT process (the celery ingest worker), so this
+        # process never observes the rebuild and would otherwise serve a cached
+        # engine forever. Dense retrieval reads Chroma live and would be fine,
+        # but the BM25 half is a snapshot of the nodes taken at build time.
+        self._engine_fingerprints: Dict[str, str] = {}
         self._bootstrapped = True
 
     def configure(self, db_path: Optional[str] = None):
@@ -183,11 +189,19 @@ class QueryEngine:
         # is sitting on disk look permanently unqueryable.
         return self._collection_has_rows(collection_name)
 
-    def get_query_engine(self, collection_name: str):
+    def get_query_engine(self, collection_name: str, fingerprint: Optional[str] = None):
+        """Pass the corpus fingerprint to get a guaranteed-fresh engine: if it
+        differs from the one the cached engine was built against, the corpus
+        was re-indexed (in another process) and the cache is rebuilt."""
         engine = self._query_engines.get(collection_name)
+        if engine is not None and fingerprint is not None \
+                and self._engine_fingerprints.get(collection_name) != fingerprint:
+            engine = None
         if engine is None and self._collection_has_rows(collection_name):
             self._ready[collection_name] = True
             engine = self.initialize_query_engine(collection_name)
+            if fingerprint is not None:
+                self._engine_fingerprints[collection_name] = fingerprint
         return engine
 
     # SimpleDirectoryReader embeds file_path by default and excludes file_name,
@@ -243,12 +257,25 @@ class QueryEngine:
         emb_model = HuggingFaceEmbedding(embedding_model, embed_batch_size=batch_size)
         return llm, emb_model
 
-    def _define_db(self, collection_name: str, db_path: str):
+    def _define_db(self, collection_name: str, db_path: str, reset: bool = False):
+        """reset=True drops and recreates the collection.
+
+        Ingestion must reset, and previously didn't: the old code only
+        recreated a collection that was already EMPTY, so re-indexing a site
+        APPENDED a second full copy of the corpus rather than replacing it.
+        Measured on this repo's own data - doc-typer-tiangolo-com held 4693
+        rows against a recorded node_count of 1962, because each re-run stacked
+        another copy on top. Duplicates crowd distinct pages out of top-k, and
+        pages deleted upstream were never removed. Since run_pipeline always
+        ingests the complete corpus, replace is the only correct semantic.
+
+        Querying must NOT reset (build_index calls this too), hence the default.
+        """
         db = chromadb.PersistentClient(path=db_path)
         collections = [col.name for col in db.list_collections()]
         if collection_name in collections:
             collection = db.get_collection(collection_name)
-            if not collection.count():
+            if reset or not collection.count():
                 db.delete_collection(collection_name)
                 collection = db.create_collection(collection_name)
         else:
@@ -264,7 +291,9 @@ class QueryEngine:
         self.configure(db_path=db_path)
         docs = self._load_docs(input_dir=input_dir)
         _, emb_model = self._define_llms()
-        vector_store = self._define_db(collection_name=collection_name, db_path=self.db_path)
+        vector_store = self._define_db(
+            collection_name=collection_name, db_path=self.db_path, reset=True
+        )
 
         pipeline = IngestionPipeline(
             # Heading split first so each chunk inherits a header_path, then a
@@ -281,6 +310,12 @@ class QueryEngine:
 
         nodes = pipeline.run(documents=docs)
         self._ready[collection_name] = True
+        # Any cached engine for this collection is now stale: its BM25
+        # retriever was built from a snapshot of the previous nodes (dense
+        # retrieval reads Chroma live, BM25 does not), so it would keep serving
+        # lexical hits from the corpus we just replaced.
+        self._query_engines.pop(collection_name, None)
+        self._engine_fingerprints.pop(collection_name, None)
         return len(nodes)
 
     def initialize_query_engine(

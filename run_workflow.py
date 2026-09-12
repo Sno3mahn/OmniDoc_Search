@@ -2,7 +2,7 @@ from agentic_etl import (
     MDifyEvent, ExtractWebpageEvent, StatusEmitterEvent, DirNameEvent, build_agents
 )
 from import_stuff import (
-    extract_page_content, run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json,
+    run_agent_verbose, run_concurrent_workflows, write_to_file, parse_agent_json, html_to_text,
     resolve_markdown_sources, looks_like_markdown, strip_common_boilerplate,
     get_html_body, extract_toc, file_name_for, sitemap_urls, sitemap_lastmod, fetch_first,
 )
@@ -264,7 +264,9 @@ class ETLWorkflow(Workflow):
             if looks_like_markdown(result.text, result.content_type):
                 content = result.text
             else:
-                content = extract_page_content([winning_url])[0]
+                # Convert the bytes already in hand rather than handing the URL
+                # to SimpleWebPageReader, which re-fetches it (twice).
+                content = html_to_text(result.text)
             write_to_file(content=content, dir_name=dir_name, file_name=file_name)
             return ''
 
