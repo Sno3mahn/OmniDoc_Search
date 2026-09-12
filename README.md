@@ -25,14 +25,14 @@ Replace this block when the video is ready:
 
 [![OmniDoc Search demo](docs/video-thumbnail.png)](https://youtu.be/VIDEO_ID)
 
-Two cuts are planned:
-  - technical deep dive  — architecture, the event graph, retrieval evaluation
-  - MVP pitch            — problem, what it does, why agentic, close
-
-Scripts live in docs/video-scripts.md (Phase 5, not yet written).
+Two cuts are scripted in docs/video-scripts.md:
+  - technical deep dive (~10 min) — architecture, discovery, retrieval, demo
+  - MVP pitch (~90 s)             — problem, what it does, why it's different
 -->
 
-*Placeholder — nothing has been recorded yet.*
+*Placeholder — nothing has been recorded yet. Both cuts are scripted
+beat-by-beat in [docs/video-scripts.md](docs/video-scripts.md), including
+production notes and the numbers to re-verify before rolling.*
 
 ---
 
@@ -140,21 +140,3 @@ Retrieval changes are gated by an eval harness (`evals/`) that scores recall@k
 and MRR against labelled question/page pairs. It uses no LLM, so it's free to
 run on every change.
 
----
-
-## Project status
-
-Built as a staged exercise: comprehension → hardening → scale planning →
-frontend → demo. Phases 1–4 are done; the video scripts (Phase 5) are not
-written yet, which is why the section above is a placeholder.
-
-Known limitations are recorded honestly rather than hidden:
-
-- `sitemap.xml` `<lastmod>` drift detection works on roughly one site in three —
-  many generators omit it. The TTL is the fallback.
-- ChromaDB's local `PersistentClient` is single-writer on local disk; that's
-  the first thing to break under real concurrency.
-- The ETL and ingest workers share a filesystem, so they must run on the same
-  host until extraction output moves to object storage.
-- `./omnidoc` hardcodes a local venv path as its default (`OMNIDOC_VENV`
-  overrides it).
